@@ -27,7 +27,7 @@ router.get('/oauth2callback', async (req, res) => {
     try {
         const { tokens } = await oauth2Client.getToken(code);
         oauth2Client.setCredentials(tokens);
-        res.redirect('https://clip-frontend-niraj1412s-projects.vercel.app/');
+        res.redirect('https://clip-frontend-three.vercel.app');
     } catch (error) {
         console.error('Error getting OAuth tokens:', error);
         res.status(500).json({ error: 'Failed to authenticate' });

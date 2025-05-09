@@ -19,8 +19,9 @@ const payloadLimit = '50mb';
 // Enhanced CORS configuration
 const corsConfig = () => {
     const productionOrigins = [
+        'https://clip-frontend-three.vercel.app',
         'https://clip-frontend-niraj1412s-projects.vercel.app',
-        'https://clip-frontend-three.vercel.app'
+        
     ];
     
     const developmentOrigins = [
@@ -136,7 +137,7 @@ if (process.env.NODE_ENV === 'production') {
     
     // Optional: Redirect root requests to your Vercel frontend
     app.get('/', (req, res) => {
-        res.redirect('https://clip-frontend-niraj1412s-projects.vercel.app');
+        res.redirect('https://clip-frontend-three.vercel.app');
     });
 
     // Optional: Health check endpoint for production monitoring

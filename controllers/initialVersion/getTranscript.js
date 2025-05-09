@@ -5,7 +5,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const PYTHON_API = process.env.PYTHON_API;
-const APPLICATION_URL = process.env.APPLICATION_URL || 'http://localhost:4001';
+const APPLICATION_URL = process.env.APPLICATION_URL || 'https://clip-backend-production.up.railway.app';
 
 // Configure global settings for Google APIs
 google.options({

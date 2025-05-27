@@ -150,17 +150,15 @@ const publicDir = path.join(__dirname, 'backend', 'public');
 app.use('/default-thumbnail.jpg', express.static(path.join(publicDir, 'default-thumbnail.jpg')));
 
 if (process.env.NODE_ENV === 'production') {
-    console.log('Serving static frontend files in production mode');
-
-    // Serve static files from the React build directory
-    app.use(express.static(path.join(__dirname, '../frontend/build')));
-
+    // Only handle API routes in production
     app.get('*', (req, res) => {
-        // Don't serve the React app for API routes or static files
-        if (req.url.startsWith('/api/') || req.url.startsWith('/temp/')) {
-            return res.status(404).json({ message: 'API endpoint not found' });
+        if (!req.url.startsWith('/api/')) {
+            return res.status(404).json({ 
+                message: 'Not found - Frontend is served separately',
+                hint: 'Your frontend is deployed at a different URL'
+            });
         }
-        res.sendFile(path.join(__dirname, '../frontend/build/index.html'));
+        next();
     });
 }
 

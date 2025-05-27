@@ -1,10 +1,11 @@
 const router = require("express").Router();
 const { mergeClips, processClip, serveVideoFile, checkVideoStatus } = require("../controllers/clipsMergeController/apifyMergeClips");
+const { videoMergeClips } = require("../controllers/clipsMergeController/videoMergeClips");
 const simpleMergeClips = require("../controllers/clipsMergeController/mergingClips");
 const fs = require('fs');
 const path = require('path');
 const { getSignedDownloadUrl } = require('../utils/s3');
-
+const { protect } = require('../middleware/authMiddleware');
 // Route for merging clips (using the original complex implementation)
 router.post("/clips", mergeClips);
 
@@ -134,5 +135,38 @@ router.get("/video/:jobId/:fileName", (req, res) => {
 
 // Original route for serving video files
 router.get("/video/:filePath", serveVideoFile);
+
+router.post('/videoMerge', protect, async (req, res) => {
+  try {
+    const { clips, title, description } = req.body;
+    const user = req.user;
+
+    if (!clips || !Array.isArray(clips)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid clips data'
+      });
+    }
+
+    const result = await videoMergeClips(clips, user, { title, description });
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        videoUrl: result.videoUrl,
+        videoId: result.videoId,
+        thumbnailUrl: result.thumbnailUrl,
+        duration: result.duration
+      }
+    });
+  } catch (error) {
+    console.error('Merge route error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to merge clips'
+    });
+  }
+});
+
 
 module.exports = router;

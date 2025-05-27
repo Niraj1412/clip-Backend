@@ -3,10 +3,13 @@ const cors = require('cors');
 const { connectDB } = require('./db');
 const usersRoute = require('./routes/usersRoute');
 const clipsRoute = require('./routes/clipsRoute');
+const uploadRoute = require('./routes/uploadRoute');
 const initialVersionRoute = require('./routes/initialVersion');
 const mergeRoute = require('./routes/mergeRoute');
 const projectRoutes = require('./routes/projectRoutes');
 const healthRoute = require('./routes/healthRoute');
+const processRoutes = require('./routes/processRoutes');
+const videoRoutes = require('./routes/videoRoutes');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
@@ -16,54 +19,66 @@ const port = process.env.PORT || 4001;
 
 const payloadLimit = '50mb';
 
-// Enhanced CORS configuration
+// Ensure uploads directory exists
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'backend', 'uploads')));
+
+// Add this before your routes
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+
+// Configure CORS based on environment
 const corsConfig = () => {
-    const productionOrigins = [
-        'https://clip-frontend-three.vercel.app',
-        'https://clip-frontend-niraj1412s-projects.vercel.app',
-        
-    ];
-    
-    const developmentOrigins = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000'
-    ];
+    // Check if we should allow all origins (useful for production)
+    const allowAllOrigins = process.env.ALLOW_ALL_ORIGINS === 'true' || process.env.NODE_ENV === 'production';
 
-    const allowedOrigins = process.env.ALLOWED_ORIGINS 
-        ? process.env.ALLOWED_ORIGINS.split(',') 
-        : [...productionOrigins, ...developmentOrigins];
+    if (allowAllOrigins) {
+        console.log('CORS: Allowing requests from all origins (production mode)');
+        return {
+            origin: true,
+            methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
+            allowedHeaders: ['Content-Type', 'Authorization'],
+            credentials: true
+        };
+    }
 
-    console.log('CORS: Allowing requests from:', allowedOrigins);
-    
+    // For development, use specific allowed origins
+    const allowedOrigins = process.env.ALLOWED_ORIGINS ?
+        process.env.ALLOWED_ORIGINS.split(',') :
+        ['https://clip-frontend-niraj1412s-projects.vercel.app/','https://clip-frontend-three.vercel.app','http://localhost:3000', 'http://127.0.0.1:3000'];
+
+    console.log('CORS: Allowing requests from specific origins:', allowedOrigins);
     return {
-        origin: function (origin, callback) {
-            // Allow requests with no origin (like mobile apps or curl requests)
-            if (!origin) return callback(null, true);
-            
-            if (process.env.ALLOW_ALL_ORIGINS === 'true') {
-                return callback(null, true);
-            }
-
-            if (allowedOrigins.some(allowed => {
-                return origin === allowed || 
-                       origin.startsWith(allowed) ||
-                       origin.includes(allowed.replace('https://', '').replace('http://', ''));
-            })) {
-                return callback(null, true);
-            }
-
-            const msg = `CORS blocked for origin: ${origin}`;
-            console.warn(msg);
-            return callback(new Error(msg));
-        },
+        origin: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
         allowedHeaders: ['Content-Type', 'Authorization'],
-        credentials: true,
-        optionsSuccessStatus: 200 // For legacy browser support
+        credentials: true
     };
 };
 
-app.use(cors(corsConfig()));
+app.use(cors({
+  origin: corsConfig().origin,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'X-Access-Token'
+  ],
+  credentials: true,
+  exposedHeaders: [
+    'Authorization',
+    'Content-Length',
+    'X-Request-ID'
+  ],
+  maxAge: 86400 // 24 hours
+}));
 
 app.use(express.json({
     limit: payloadLimit,
@@ -71,133 +86,110 @@ app.use(express.json({
     parameterLimit: 50000
 }));
 
-app.use(express.urlencoded({ 
+app.use(express.urlencoded({
     extended: true,
     limit: payloadLimit,
     parameterLimit: 50000
 }));
 
-// Enhanced request logging middleware
+// Add request logging middleware
 app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`, {
-        headers: req.headers,
-        body: req.body
-    });
-    next();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
 });
 
-// Ensure temp directory exists
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
-    console.log(`Created temp directory at: ${tempDir}`);
 }
 
 // Serve static files from the temp directory
-app.use('/temp', express.static(tempDir, {
-    setHeaders: (res, path) => {
-        if (path.endsWith('.mp4')) {
-            res.setHeader('Content-Type', 'video/mp4');
-        }
-    }
-}));
+app.use('/temp', express.static(path.join(__dirname, 'temp')));
 
-// Enhanced route to check if a file exists
+// Add a route to check if a file exists
 app.head('/temp/:jobId/merged.mp4', (req, res) => {
     const { jobId } = req.params;
-    const filePath = path.join(tempDir, jobId, 'merged.mp4');
-    
-    try {
-        if (fs.existsSync(filePath)) {
-            const stats = fs.statSync(filePath);
-            if (stats.size > 0) {
-                res.setHeader('Content-Length', stats.size);
-                res.setHeader('Content-Type', 'video/mp4');
-                return res.status(200).end();
-            }
+    const filePath = path.join(__dirname, 'temp', jobId, 'merged.mp4');
+
+    if (fs.existsSync(filePath)) {
+        const stats = fs.statSync(filePath);
+        if (stats.size > 0) {
+            res.setHeader('Content-Length', stats.size);
+            res.setHeader('Content-Type', 'video/mp4');
+            res.status(200).end();
+        } else {
+            res.status(404).end();
         }
+    } else {
         res.status(404).end();
-    } catch (error) {
-        console.error('Error checking file:', error);
-        res.status(500).end();
     }
 });
 
-// API routes
+// Routes
 app.use('/api/v1/auth', usersRoute);
 app.use('/api/clips', clipsRoute);
+app.use('/api/v1/upload', uploadRoute);
 app.use('/api/v1/youtube', initialVersionRoute);
 app.use('/api/merge', mergeRoute);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/health', healthRoute);
+app.use('/api/v1', processRoutes);
+app.use('/api/v1/video', videoRoutes);
 
-// Production-specific configuration
+// Add this before your routes
+const thumbnailsDir = path.join(__dirname, 'backend', 'thumbnails');
+if (!fs.existsSync(thumbnailsDir)) {
+  fs.mkdirSync(thumbnailsDir, { recursive: true });
+}
+
+// Serve thumbnails from the correct directory
+app.use('/thumbnails', express.static(thumbnailsDir));
+
+// Serve default thumbnail
+const publicDir = path.join(__dirname, 'backend', 'public');
+app.use('/default-thumbnail.jpg', express.static(path.join(publicDir, 'default-thumbnail.jpg')));
+
 if (process.env.NODE_ENV === 'production') {
-    console.log('Running in production mode');
-    
-    // Optional: Redirect root requests to your Vercel frontend
-    app.get('/', (req, res) => {
-        res.redirect('https://clip-frontend-three.vercel.app');
-    });
+    console.log('Serving static frontend files in production mode');
 
-    // Optional: Health check endpoint for production monitoring
-    app.get('/status', (req, res) => {
-        res.status(200).json({ 
-            status: 'ok',
-            timestamp: new Date().toISOString() 
-        });
+    // Serve static files from the React build directory
+    app.use(express.static(path.join(__dirname, '../frontend/build')));
+
+    app.get('*', (req, res) => {
+        // Don't serve the React app for API routes or static files
+        if (req.url.startsWith('/api/') || req.url.startsWith('/temp/')) {
+            return res.status(404).json({ message: 'API endpoint not found' });
+        }
+        res.sendFile(path.join(__dirname, '../frontend/build/index.html'));
     });
 }
 
-// Enhanced global error handler
+// Global error handler
 app.use((err, req, res, next) => {
-    console.error('Global error handler caught:', {
-        error: err,
-        url: req.originalUrl,
-        method: req.method,
-        headers: req.headers
-    });
-
-    // Handle CORS errors
-    if (err.message && err.message.includes('CORS blocked')) {
-        return res.status(403).json({
-            success: false,
-            message: 'Forbidden - origin not allowed',
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
-    }
-
+    console.error('Global error handler caught:', err);
     res.status(500).json({
-        success: false,
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-});
-
-// 404 handler (only for API routes)
-app.use('/api/*', (req, res) => {
-    res.status(404).json({
-        success: false,
-        message: 'API endpoint not found'
+        error: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message
     });
 });
 
 // Connect to MongoDB and start server
-const startServer = async () => {
-    try {
-        await connectDB(); // Make sure connectDB returns a promise or is async
-        app.listen(port, () => {
-            console.log(`Server running on port ${port}`);
-            console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-            console.log(`Allowed Origins: ${process.env.ALLOWED_ORIGINS || 'default'}`);
-        });
-    } catch (err) {
-        console.error('Failed to start server:', err);
-        process.exit(1);
-    }
-};
+connectDB();
 
-startServer();
+// Start the server - no need for .then as we handle connection errors separately
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
 
-module.exports = app;
+console.log('Registered routes:');
+app._router.stack.forEach(middleware => {
+  if (middleware.route) {
+    console.log(`${Object.keys(middleware.route.methods).join(', ').toUpperCase()} ${middleware.route.path}`);
+  } else if (middleware.name === 'router') {
+    middleware.handle.stack.forEach(handler => {
+      if (handler.route) {
+        console.log(`${Object.keys(handler.route.methods).join(', ').toUpperCase()} /api/v1${handler.route.path}`);
+      }
+    });
+  }
+});

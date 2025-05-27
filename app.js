@@ -27,7 +27,25 @@ const ensureDirs = () => {
 };
 
 // Middleware
-app.use(cors(config.cors));
+
+app.use(cors({
+  origin: corsConfig().origin,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'X-Access-Token'
+  ],
+  credentials: true,
+  exposedHeaders: [
+    'Authorization',
+    'Content-Length',
+    'X-Request-ID'
+  ],
+  maxAge: 86400 // 24 hours
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -48,6 +66,7 @@ app.use('/output', express.static(path.join(__dirname, config.paths.outputDir)))
 // API routes
 console.log('Setting up API routes...');
 app.use('/api/clips', clipsRoutes);
+
 console.log('Routes initialized: /api/clips/*');
 
 // Health check endpoint

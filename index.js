@@ -150,44 +150,59 @@ const publicDir = path.join(__dirname, 'backend', 'public');
 app.use('/default-thumbnail.jpg', express.static(path.join(publicDir, 'default-thumbnail.jpg')));
 
 if (process.env.NODE_ENV === 'production') {
-    // Only handle API routes in production
-    app.get('*', (req, res) => {
-        if (!req.url.startsWith('/api/')) {
-            return res.status(404).json({ 
-                message: 'Not found - Frontend is served separately',
-                hint: 'Your frontend is deployed at a different URL'
-            });
-        }
-        next();
-    });
+  app.get('*', (req, res, next) => {
+    if (!req.path.startsWith('/api/')) {
+      return res.status(404).json({ 
+        message: 'Not found - Frontend is served separately',
+        hint: 'Your frontend is deployed at a different URL'
+      });
+    }
+    next();
+  });
 }
 
 // Global error handler
 app.use((err, req, res, next) => {
-    console.error('Global error handler caught:', err);
-    res.status(500).json({
-        message: 'Internal server error',
-        error: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message
-    });
+  console.error('Global error handler caught:', err.stack || err);
+  
+  // Handle specific error types
+  if (err.name === 'UnauthorizedError') {
+    return res.status(401).json({ message: 'Invalid or expired token' });
+  }
+  
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ message: 'File too large' });
+  }
+
+  // Default error response
+  res.status(err.status || 500).json({
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
 });
 
 // Connect to MongoDB and start server
-connectDB();
-
-// Start the server - no need for .then as we handle connection errors separately
-app.listen(port, () => {
+connectDB().then(() => {
+  app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-});
-
-console.log('Registered routes:');
-app._router.stack.forEach(middleware => {
-  if (middleware.route) {
-    console.log(`${Object.keys(middleware.route.methods).join(', ').toUpperCase()} ${middleware.route.path}`);
-  } else if (middleware.name === 'router') {
-    middleware.handle.stack.forEach(handler => {
-      if (handler.route) {
-        console.log(`${Object.keys(handler.route.methods).join(', ').toUpperCase()} /api/v1${handler.route.path}`);
-      }
-    });
-  }
+    console.log('Registered routes:');
+    
+    // Print registered routes
+    const printRoutes = (router, prefix = '') => {
+      router.stack.forEach(middleware => {
+        if (middleware.route) {
+          const methods = Object.keys(middleware.route.methods).join(', ').toUpperCase();
+          console.log(`${methods} ${prefix}${middleware.route.path}`);
+        } else if (middleware.name === 'router') {
+          printRoutes(middleware.handle, prefix + middleware.regexp.source.replace('\\/?(?=\\/|$)', '') + '/');
+        }
+      });
+    };
+    
+    printRoutes(app._router);
+  });
+}).catch(err => {
+  console.error('Failed to connect to MongoDB:', err);
+  process.exit(1);
 });

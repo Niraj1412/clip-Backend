@@ -16,27 +16,21 @@ router.options('/process/:videoId', (req, res) => {
 });
 
 // Unified path resolver for all environments
-const resolveFilePath = (videoUrl) => {
-  if (videoUrl.startsWith('http')) {
-    return videoUrl;
-  }
+const getProductionPath = (filePath) => {
+  const basePaths = [
+    '/backend/uploads',
+    '/app/uploads',
+    '/uploads',
+    path.join(__dirname, '../../uploads')
+  ];
 
-  // Handle Railway production environment
-  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
-    if (videoUrl.startsWith('uploads/')) {
-      return path.join('/backend', videoUrl);
+  for (const base of basePaths) {
+    const fullPath = path.join(base, path.basename(filePath));
+    if (fs.existsSync(fullPath)) {
+      return fullPath;
     }
-    return path.join('/backend/uploads', path.basename(videoUrl));
   }
-
-  // Handle local development
-  const basePath = process.env.NODE_ENV === 'production' 
-    ? path.join(__dirname, '../uploads')
-    : path.join(__dirname, '../../uploads');
-
-  return videoUrl.startsWith('uploads/')
-    ? path.join(basePath, path.basename(videoUrl))
-    : path.join(basePath, videoUrl);
+  return null;
 };
 
 // Main processing endpoint

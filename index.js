@@ -183,26 +183,22 @@ app.use((err, req, res, next) => {
 });
 
 // Connect to MongoDB and start server
-connectDB().then(() => {
-  app.listen(port, () => {
+connectDB();
+
+// Start the server - no need for .then as we handle connection errors separately
+app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-    console.log('Registered routes:');
-    
-    // Print registered routes
-    const printRoutes = (router, prefix = '') => {
-      router.stack.forEach(middleware => {
-        if (middleware.route) {
-          const methods = Object.keys(middleware.route.methods).join(', ').toUpperCase();
-          console.log(`${methods} ${prefix}${middleware.route.path}`);
-        } else if (middleware.name === 'router') {
-          printRoutes(middleware.handle, prefix + middleware.regexp.source.replace('\\/?(?=\\/|$)', '') + '/');
-        }
-      });
-    };
-    
-    printRoutes(app._router);
-  });
-}).catch(err => {
-  console.error('Failed to connect to MongoDB:', err);
-  process.exit(1);
+});
+
+console.log('Registered routes:');
+app._router.stack.forEach(middleware => {
+  if (middleware.route) {
+    console.log(`${Object.keys(middleware.route.methods).join(', ').toUpperCase()} ${middleware.route.path}`);
+  } else if (middleware.name === 'router') {
+    middleware.handle.stack.forEach(handler => {
+      if (handler.route) {
+        console.log(`${Object.keys(handler.route.methods).join(', ').toUpperCase()} /api/v1${handler.route.path}`);
+      }
+    });
+  }
 });

@@ -26,7 +26,14 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'backend', 'uploads')));
+const staticConfig = {
+  dotfiles: 'ignore',
+  etag: true,
+  extensions: ['jpg', 'jpeg', 'png', 'mp4'],
+  maxAge: '1d'
+};
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), staticConfig));
 
 // Add this before your routes
 app.use(express.json({ limit: '500mb' }));
@@ -104,7 +111,7 @@ if (!fs.existsSync(tempDir)) {
 }
 
 // Serve static files from the temp directory
-app.use('/temp', express.static(path.join(__dirname, 'temp')));
+app.use('/temp', express.static(path.join(__dirname, 'temp'), staticConfig));
 
 // Add a route to check if a file exists
 app.head('/temp/:jobId/merged.mp4', (req, res) => {
@@ -143,7 +150,7 @@ if (!fs.existsSync(thumbnailsDir)) {
 }
 
 // Serve thumbnails from the correct directory
-app.use('/thumbnails', express.static(thumbnailsDir));
+app.use('/thumbnails', express.static(thumbnailsDir, staticConfig));
 
 // Serve default thumbnail
 const publicDir = path.join(__dirname, 'backend', 'public');

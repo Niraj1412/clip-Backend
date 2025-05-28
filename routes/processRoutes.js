@@ -7,6 +7,13 @@ const Video = require('../model/uploadVideosSchema');
 
 const router = express.Router();
 
+router.options('/process/:videoId', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.status(204).end();
+});
+
 // Enhanced process route with better validation and logging
 router.post('/process/:videoId([a-f0-9]{24})', protect, async (req, res) => {
   console.log(`\n=== PROCESS ROUTE TRIGGERED ===`);
@@ -60,9 +67,16 @@ router.post('/process/:videoId([a-f0-9]{24})', protect, async (req, res) => {
     }
 
     // Resolve file path - handle both relative and absolute paths
-    const filePath = video.videoUrl.startsWith('/') 
-      ? video.videoUrl
-      : path.join(__dirname, '../../uploads', video.videoUrl);
+    // Replace the current path resolution with:
+const filePath = video.videoUrl.startsWith('http')
+  ? video.videoUrl // Handle URLs
+  : video.videoUrl.startsWith('/')
+    ? video.videoUrl // Handle absolute paths
+    : path.join(
+        __dirname, 
+        process.env.NODE_ENV === 'production' ? '../uploads' : '../../uploads',
+        video.videoUrl
+      );
 
     console.log('Resolved file path:', filePath);
 

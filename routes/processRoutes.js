@@ -15,139 +15,202 @@ router.options('/process/:videoId', (req, res) => {
   res.status(204).end();
 });
 
-// Unified path resolver for all environments
-const getProductionPath = (filePath) => {
-  const basePaths = [
-    '/backend/uploads',
-    '/app/uploads',
-    '/uploads',
-    path.join(__dirname, '../../uploads')
-  ];
+// Enhanced path resolution with multiple fallbacks
+const resolveFilePath = (videoUrl) => {
+  // Handle remote URLs
+  if (videoUrl.startsWith('http')) {
+    return videoUrl;
+  }
 
-  for (const base of basePaths) {
-    const fullPath = path.join(base, path.basename(filePath));
-    if (fs.existsSync(fullPath)) {
-      return fullPath;
+  // Handle absolute paths
+  if (videoUrl.startsWith('/')) {
+    return videoUrl;
+  }
+
+  const filename = path.basename(videoUrl);
+  const possiblePaths = [];
+
+  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
+    possiblePaths.push(
+      path.join('/backend/uploads', filename),
+      path.join('/app/uploads', filename),
+      path.join('/uploads', filename)
+    );
+  } else {
+    possiblePaths.push(
+      path.join(__dirname, '../../uploads', filename),
+      path.join(__dirname, '../uploads', filename)
+    );
+  }
+
+  // Add the original path as a fallback
+  if (videoUrl.startsWith('uploads/')) {
+    possiblePaths.push(path.join(__dirname, '../../', videoUrl));
+  }
+
+  // Find the first existing path
+  for (const possiblePath of possiblePaths) {
+    if (fs.existsSync(possiblePath)) {
+      return possiblePath;
     }
   }
+
   return null;
 };
 
-// Main processing endpoint
+// Main processing endpoint with comprehensive error handling
 router.post('/process/:videoId', protect, async (req, res) => {
-  console.log(`\n[${new Date().toISOString()}] PROCESS ROUTE HIT`);
-  console.log('Method:', req.method);
-  console.log('URL:', req.originalUrl);
-  console.log('Params:', req.params);
-  console.log('User ID:', req.user?._id);
+  const startTime = Date.now();
+  const requestId = Math.random().toString(36).substring(2, 9);
+  
+  console.log(`\n[${new Date().toISOString()}] [${requestId}] PROCESS REQUEST STARTED`);
+  console.log(`[${requestId}] Method: ${req.method} ${req.originalUrl}`);
+  console.log(`[${requestId}] User: ${req.user?._id}`);
 
   try {
     const { videoId } = req.params;
 
-    // Validate input
+    // Input validation
     if (!videoId || !/^[a-f0-9]{24}$/.test(videoId)) {
-      console.error('Invalid video ID format');
+      console.error(`[${requestId}] Invalid video ID format`);
       return res.status(400).json({
         success: false,
-        error: 'Invalid video ID format'
+        error: 'Invalid video ID format',
+        requestId
       });
     }
 
     if (!req.user?._id) {
-      console.error('Unauthorized access attempt');
+      console.error(`[${requestId}] Unauthorized access attempt`);
       return res.status(401).json({
         success: false,
-        error: 'Unauthorized access'
+        error: 'Unauthorized access',
+        requestId
       });
     }
 
-    // Find video document
+    // Database lookup
+    console.log(`[${requestId}] Searching for video ${videoId}`);
     const video = await Video.findOne({
       _id: videoId,
       userId: req.user._id
     }).lean();
 
     if (!video) {
-      console.error('Video not found for user');
+      console.error(`[${requestId}] Video not found for user`);
       return res.status(404).json({
         success: false,
-        error: 'Video not found'
+        error: 'Video not found',
+        requestId
       });
     }
 
     if (!video.videoUrl || typeof video.videoUrl !== 'string') {
-      console.error('Invalid video URL in database');
+      console.error(`[${requestId}] Invalid video URL in database`);
       return res.status(500).json({
         success: false,
-        error: 'Invalid video data'
+        error: 'Invalid video data',
+        requestId
       });
     }
 
-    // Resolve and verify file path
+    // File path resolution
+    console.log(`[${requestId}] Resolving path for: ${video.videoUrl}`);
     const filePath = resolveFilePath(video.videoUrl);
-    console.log('Resolved file path:', filePath);
 
-    if (!fs.existsSync(filePath)) {
-      console.error('File not found. Searched locations:', [
-        filePath,
-        path.join('/app', filePath),
-        path.join('/backend', filePath)
-      ]);
+    if (!filePath) {
+      console.error(`[${requestId}] File not found. Searched locations:`);
+      const possiblePaths = [
+        path.join('/backend/uploads', path.basename(video.videoUrl)),
+        path.join('/app/uploads', path.basename(video.videoUrl)),
+        path.join(__dirname, '../../uploads', path.basename(video.videoUrl))
+      ];
+      possiblePaths.forEach(p => console.log(`[${requestId}] - ${p}`));
+      
       return res.status(404).json({
         success: false,
         error: 'Video file not found',
-        debug: process.env.NODE_ENV === 'development' ? { attemptedPath: filePath } : undefined
+        requestId,
+        debug: process.env.NODE_ENV === 'development' ? { 
+          attemptedPaths: possiblePaths 
+        } : undefined
       });
     }
 
-    // Process video
-    console.log('Starting video processing...');
+    console.log(`[${requestId}] Using file path: ${filePath}`);
+
+    // Video processing
+    console.log(`[${requestId}] Starting video processing...`);
     const result = await processVideo({
       videoId,
       filePath,
       userId: req.user._id.toString(),
-      authToken: req.headers.authorization || ''
+      authToken: req.headers.authorization || '',
+      requestId
     });
 
-    console.log('Video processing completed successfully');
+    const duration = Date.now() - startTime;
+    console.log(`[${requestId}] Processing completed in ${duration}ms`);
+
     return res.status(200).json({
       success: true,
-      data: result
+      data: result,
+      requestId,
+      durationMs: duration
     });
 
   } catch (error) {
-    console.error('PROCESSING ERROR:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[${requestId}] PROCESSING ERROR (${duration}ms):`, error);
+    
     return res.status(500).json({
       success: false,
       error: 'Video processing failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      requestId,
+      durationMs: duration,
+      details: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 });
 
-// Thumbnail endpoint
+// Thumbnail endpoint with improved caching
 router.get('/thumbnails/:videoId', async (req, res) => {
+  const defaultThumbnail = path.join(__dirname, '../../backend/public/default-thumbnail.jpg');
+  
   try {
     const { videoId } = req.params;
-    const video = await Video.findById(videoId);
-    
-    const defaultThumbnail = path.join(__dirname, '../../backend/public/default-thumbnail.jpg');
-    
-    if (!video || !video.thumbnailUrl) {
+    if (!videoId || !/^[a-f0-9]{24}$/.test(videoId)) {
       return res.sendFile(defaultThumbnail);
     }
 
-    // Resolve thumbnail path for different environments
-    const thumbnailPath = process.env.RAILWAY_ENVIRONMENT === 'production'
-      ? path.join('/backend/thumbnails', path.basename(video.thumbnailUrl))
-      : path.join(__dirname, '../../backend/thumbnails', path.basename(video.thumbnailUrl));
+    const video = await Video.findById(videoId);
+    if (!video?.thumbnailUrl) {
+      return res.sendFile(defaultThumbnail);
+    }
 
-    return fs.existsSync(thumbnailPath)
-      ? res.sendFile(thumbnailPath)
-      : res.sendFile(defaultThumbnail);
+    // Resolve thumbnail path
+    let thumbnailPath;
+    if (process.env.RAILWAY_ENVIRONMENT === 'production') {
+      thumbnailPath = path.join('/backend/thumbnails', path.basename(video.thumbnailUrl));
+      if (!fs.existsSync(thumbnailPath)) {
+        thumbnailPath = path.join('/app/thumbnails', path.basename(video.thumbnailUrl));
+      }
+    } else {
+      thumbnailPath = path.join(__dirname, '../../backend/thumbnails', path.basename(video.thumbnailUrl));
+    }
+
+    if (fs.existsSync(thumbnailPath)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hour cache
+      return res.sendFile(thumbnailPath);
+    }
+
+    return res.sendFile(defaultThumbnail);
   } catch (error) {
     console.error('THUMBNAIL ERROR:', error);
-    return res.sendFile(path.join(__dirname, '../../backend/public/default-thumbnail.jpg'));
+    return res.sendFile(defaultThumbnail);
   }
 });
 

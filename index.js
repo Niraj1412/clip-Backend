@@ -153,7 +153,12 @@ if (!fs.existsSync(thumbnailsDir)) {
 }
 
 // Serve thumbnails from the correct directory
-app.use('/thumbnails', express.static(thumbnailsDir, staticConfig));
+app.use('/thumbnails', express.static(thumbnailsDir, {
+  maxAge: '1d',
+  setHeaders: (res, path) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+}));
 
 // Serve default thumbnail
 const publicDir = path.join(__dirname, 'backend', 'public');

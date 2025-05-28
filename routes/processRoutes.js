@@ -1,68 +1,81 @@
-const express = require('express');
-const {protect} = require('../middleware/authMiddleware');
+const express = require('express'); // Add this missing import
+const { protect } = require('../middleware/authMiddleware');
 const processVideo = require('../controllers/videosController/processVideo');
 const path = require('path');
 const fs = require('fs');
 const Video = require('../model/uploadVideosSchema');
 
 const router = express.Router();
-// Add these logs right before processing:
 
-router.post('/process/:videoId', protect, async (req, res) => {
-  console.log(`Process route hit for videoId: ${req.params.videoId}`);
+// Enhanced process route with better validation and logging
+router.post('/process/:videoId([a-f0-9]{24})', protect, async (req, res) => {
+  console.log(`\n=== PROCESS ROUTE TRIGGERED ===`);
+  console.log(`Method: ${req.method}`);
+  console.log(`URL: ${req.originalUrl}`);
+  console.log(`Params:`, req.params);
+  console.log(`User:`, req.user?._id);
+
   try {
     const { videoId } = req.params;
 
-    // Validate input
-    if (!videoId || typeof videoId !== 'string') {
+    // Validate MongoDB ID format
+    if (!/^[a-f0-9]{24}$/.test(videoId)) {
+      console.error('Invalid video ID format');
       return res.status(400).json({
         success: false,
-        error: 'Invalid video ID'
+        error: 'Invalid video ID format'
       });
     }
 
-    // Ensure user is authenticated
-    if (!req.user || !req.user._id) {
+    // Verify user authentication
+    if (!req.user?._id) {
+      console.error('Unauthorized - No user in request');
       return res.status(401).json({
         success: false,
-        error: 'Unauthorized access. User not authenticated.'
+        error: 'Unauthorized access'
       });
     }
 
-    // Find video owned by the current user
+    // Find the video document
     const video = await Video.findOne({
       _id: videoId,
       userId: req.user._id
-    });
+    }).lean();
 
     if (!video) {
+      console.error('Video not found for user');
       return res.status(404).json({
         success: false,
-        error: 'Video not found or unauthorized access'
+        error: 'Video not found'
       });
     }
 
-    // Check if videoUrl exists and is a valid string
+    // Validate video URL
     if (!video.videoUrl || typeof video.videoUrl !== 'string') {
+      console.error('Invalid video URL in database');
       return res.status(500).json({
         success: false,
-        error: 'Invalid video URL in database'
+        error: 'Invalid video data'
       });
     }
 
-    // Resolve full absolute file path safely
-    const filePath = path.resolve(video.videoUrl);
-console.log('Stored videoUrl:', video.videoUrl);
-console.log('Resolved filePath:', filePath);
-console.log('Full absolute path:', path.resolve(filePath));
+    // Resolve file path - handle both relative and absolute paths
+    const filePath = video.videoUrl.startsWith('/') 
+      ? video.videoUrl
+      : path.join(__dirname, '../../uploads', video.videoUrl);
+
+    console.log('Resolved file path:', filePath);
+
     if (!fs.existsSync(filePath)) {
+      console.error('Video file not found at path:', filePath);
       return res.status(404).json({
         success: false,
-        error: 'Video file not found on server'
+        error: 'Video file missing'
       });
     }
 
-    // Pass video details to processor
+    // Process the video
+    console.log('Starting video processing...');
     const result = await processVideo({
       videoId,
       filePath,
@@ -70,23 +83,23 @@ console.log('Full absolute path:', path.resolve(filePath));
       authToken: req.headers.authorization || ''
     });
 
-    res.status(200).json({
+    console.log('Video processing completed successfully');
+    return res.status(200).json({
       success: true,
       ...result
     });
 
   } catch (error) {
-    console.error('Video Processing Error:', error);
-
-    res.status(500).json({
+    console.error('PROCESSING ERROR:', error);
+    return res.status(500).json({
       success: false,
-      error: 'Video processing failed',
+      error: 'Processing failed',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// Add this to your processRoutes.js
+// Thumbnail route remains the same
 router.get('/thumbnails/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
@@ -99,13 +112,12 @@ router.get('/thumbnails/:videoId', async (req, res) => {
     const thumbnailPath = path.join(__dirname, '../../backend/thumbnails', path.basename(video.thumbnailUrl));
     
     if (fs.existsSync(thumbnailPath)) {
-      res.sendFile(thumbnailPath);
-    } else {
-      res.sendFile(path.join(__dirname, '../../backend/public/default-thumbnail.jpg'));
+      return res.sendFile(thumbnailPath);
     }
+    return res.sendFile(path.join(__dirname, '../../backend/public/default-thumbnail.jpg'));
   } catch (error) {
-    console.error('Error serving thumbnail:', error);
-    res.sendFile(path.join(__dirname, '../../backend/public/default-thumbnail.jpg'));
+    console.error('THUMBNAIL ERROR:', error);
+    return res.sendFile(path.join(__dirname, '../../backend/public/default-thumbnail.jpg'));
   }
 });
 

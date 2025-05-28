@@ -140,7 +140,10 @@ app.use('/api/v1/youtube', initialVersionRoute);
 app.use('/api/merge', mergeRoute);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/health', healthRoute);
-app.use('/api/v1', processRoutes);
+app.use('/api/v1', (req, res, next) => {
+  console.log(`Incoming API v1 request: ${req.method} ${req.path}`);
+  next();
+}, processRoutes);
 app.use('/api/v1/video', videoRoutes);
 
 // Add this before your routes

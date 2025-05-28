@@ -9,7 +9,7 @@ const router = express.Router();
 // Add these logs right before processing:
 
 router.post('/process/:videoId', protect, async (req, res) => {
-  
+  console.log(`Process route hit for videoId: ${req.params.videoId}`);
   try {
     const { videoId } = req.params;
 

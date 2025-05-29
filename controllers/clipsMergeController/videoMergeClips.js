@@ -81,7 +81,6 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         const video = await Video.findById(clip.videoId);
         if (!video) throw new Error(`Video not found for ID: ${clip.videoId}`);
 
-        // Resolve the actual file path
         const resolvedPath = resolveVideoPath(video.videoUrl);
         if (!fs.existsSync(resolvedPath)) {
           throw new Error(`Video file not found at: ${resolvedPath}`);
@@ -95,7 +94,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
           startTime: clip.startTime,
           endTime: clip.endTime,
           duration: clipDuration,
-          videoId: clip.videoId,
+          videoId: clip.videoId.toString(), // Ensure string format to match schema
           title: clip.title || video.title,
           thumbnail: video.thumbnailUrl,
           originalVideoTitle: video.title
@@ -142,14 +141,26 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         ffmpegProcess = commandLine;
       })
       .on('progress', (progress) => {
-        console.log(`[${jobId}] Progress: ${progress.percent}%`);
+        console.log(`[${jobId}] Progress: ${Math.round(progress.percent || 0)}%`);
       })
       .on('end', async () => {
         try {
           console.log(`[${jobId}] Merge completed successfully`);
           
           // Generate thumbnail
-          const thumbnailUrl = await generateThumbnail(outputPath, jobId);
+          let thumbnailUrl = clipDetails[0]?.thumbnail || '';
+          try {
+            const thumbnailPath = path.join(outputDir, `thumbnail_${jobId}.jpg`);
+            await generateThumbnail(outputPath, thumbnailPath);
+            const thumbnailKey = `merged-videos/${user.id}/thumbnails/thumbnail_${jobId}.jpg`;
+            thumbnailUrl = await uploadToS3(thumbnailPath, thumbnailKey, {
+              ContentType: 'image/jpeg',
+              ACL: 'public-read'
+            });
+            fs.unlinkSync(thumbnailPath);
+          } catch (thumbnailError) {
+            console.error(`[${jobId}] Thumbnail generation failed:`, thumbnailError);
+          }
           
           // Upload to S3
           const s3Key = `merged-videos/${user.id}/${outputFileName}`;
@@ -158,17 +169,21 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
             ACL: 'public-read'
           });
 
-          // Save to database
+          if (!s3Url) {
+            throw new Error('Failed to get S3 URL after upload');
+          }
+
+          // Create the final video document - EXACTLY MATCHING YOUR SCHEMA
           const finalVideo = new FinalVideo({
-            userId: user.id,
-            jobId,
+            userId: user.id.toString(),
             title: videoInfo.title || `Merged Video ${new Date().toLocaleDateString()}`,
             description: videoInfo.description || '',
+            jobId,
             duration: totalDuration,
-            videoUrl: s3Url,
+            s3Url: s3Url, // REQUIRED FIELD
             thumbnailUrl,
-            userEmail: user.email,
-            userName: user.name,
+            userEmail: user.email || '',
+            userName: user.name || '',
             sourceClips: clipDetails.map(clip => ({
               videoId: clip.videoId,
               title: clip.title,
@@ -180,7 +195,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
             })),
             stats: {
               totalClips: clipDetails.length,
-              totalDuration,
+              totalDuration: totalDuration,
               processingTime: Date.now() - startTime,
               mergeDate: new Date()
             }
@@ -206,8 +221,11 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
           reject(err);
         }
       })
-      .on('error', (err) => {
+      .on('error', (err, stdout, stderr) => {
         console.error(`[${jobId}] FFmpeg error:`, err);
+        console.error(`[${jobId}] FFmpeg stdout:`, stdout);
+        console.error(`[${jobId}] FFmpeg stderr:`, stderr);
+        
         if (ffmpegProcess) {
           try {
             process.kill(ffmpegProcess.pid, 'SIGKILL');

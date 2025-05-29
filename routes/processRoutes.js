@@ -177,41 +177,91 @@ router.post('/process/:videoId', protect, async (req, res) => {
 });
 
 // Thumbnail endpoint with improved caching
-router.get('/thumbnails/:videoId', async (req, res) => {
-  const defaultThumbnail = path.join(__dirname, '../../backend/public/default-thumbnail.jpg');
-  
+const defaultThumbnail = path.join(__dirname, '../../backend/public/default-thumbnail.jpg');
+
+// Supported thumbnail extensions
+const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+
+router.get('/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
+    
+    // Validate video ID format
     if (!videoId || !/^[a-f0-9]{24}$/.test(videoId)) {
-      return res.sendFile(defaultThumbnail);
+      return sendDefaultThumbnail(res);
     }
 
-    const video = await Video.findById(videoId);
-    if (!video?.thumbnailUrl) {
-      return res.sendFile(defaultThumbnail);
+    // Find video document (only need thumbnailUrl)
+    const video = await Video.findById(videoId).select('thumbnailUrl').lean();
+    if (!video || !video.thumbnailUrl) {
+      return sendDefaultThumbnail(res);
     }
 
-    // Resolve thumbnail path
-    let thumbnailPath;
-    if (process.env.RAILWAY_ENVIRONMENT === 'production') {
-      thumbnailPath = path.join('/backend/thumbnails', path.basename(video.thumbnailUrl));
-      if (!fs.existsSync(thumbnailPath)) {
-        thumbnailPath = path.join('/app/thumbnails', path.basename(video.thumbnailUrl));
-      }
-    } else {
-      thumbnailPath = path.join(__dirname, '../../backend/thumbnails', path.basename(video.thumbnailUrl));
+    // Generate possible thumbnail filenames (with different extensions)
+    const baseFilename = path.basename(video.thumbnailUrl, path.extname(video.thumbnailUrl));
+    const possibleFilenames = ALLOWED_EXTENSIONS.map(ext => `${baseFilename}${ext}`);
+
+    // Check all possible locations
+    const foundPath = findThumbnailPath(possibleFilenames);
+    if (foundPath) {
+      return sendThumbnail(res, foundPath);
     }
 
-    if (fs.existsSync(thumbnailPath)) {
-      res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hour cache
-      return res.sendFile(thumbnailPath);
-    }
+    // Fallback to default thumbnail
+    return sendDefaultThumbnail(res);
 
-    return res.sendFile(defaultThumbnail);
   } catch (error) {
-    console.error('THUMBNAIL ERROR:', error);
-    return res.sendFile(defaultThumbnail);
+    console.error('Thumbnail serving error:', error);
+    return sendDefaultThumbnail(res);
   }
 });
+
+// Helper function to find thumbnail in possible locations
+function findThumbnailPath(filenames) {
+  const possiblePaths = [];
+  
+  // Production paths (Railway)
+  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
+    possiblePaths.push(
+      '/backend/thumbnails',
+      '/app/thumbnails',
+      '/backend/uploads/thumbnails',
+      '/app/uploads/thumbnails'
+    );
+  } 
+  // Development paths
+  else {
+    possiblePaths.push(
+      path.join(__dirname, '../../backend/thumbnails'),
+      path.join(__dirname, '../../uploads/thumbnails')
+    );
+  }
+
+  // Check all combinations of paths and filenames
+  for (const dir of possiblePaths) {
+    for (const filename of filenames) {
+      const fullPath = path.join(dir, filename);
+      if (fs.existsSync(fullPath)) {
+        return fullPath;
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Helper function to send thumbnail with proper headers
+function sendThumbnail(res, filePath) {
+  res.setHeader('Cache-Control', 'public, max-age=86400'); // 24h cache
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  return res.sendFile(filePath);
+}
+
+// Helper function to send default thumbnail
+function sendDefaultThumbnail(res) {
+  res.setHeader('Cache-Control', 'public, max-age=3600'); // 1h cache for default
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  return res.sendFile(defaultThumbnail);
+}
 
 module.exports = router;

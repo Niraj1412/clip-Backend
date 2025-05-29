@@ -5,7 +5,6 @@ const { v4: uuidv4 } = require('uuid');
 const Video = require('../../model/uploadVideosSchema');
 const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
-const { generateThumbnail } = require('../videosController/thumbnailGenerator'); // Import your thumbnail generator
 
 // Configure FFmpeg path based on environment
 const ffmpegPath = process.env.NODE_ENV === 'production' 
@@ -143,45 +142,23 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         ffmpegProcess = commandLine;
       })
       .on('progress', (progress) => {
-        console.log(`[${jobId}] Progress: ${Math.round(progress.percent || 0)}%`);
+        console.log(`[${jobId}] Progress: ${progress.percent}%`);
       })
       .on('end', async () => {
         try {
           console.log(`[${jobId}] Merge completed successfully`);
           
-          // Generate thumbnail using your existing function
-          const thumbnailPath = path.join(outputDir, `thumbnail_${jobId}.jpg`);
-          let thumbnailUrl = '';
-          try {
-            await generateThumbnail(outputPath, thumbnailPath);
-            
-            // Upload thumbnail to S3
-            const thumbnailKey = `merged-videos/${user.id}/thumbnails/thumbnail_${jobId}.jpg`;
-            thumbnailUrl = await uploadToS3(thumbnailPath, thumbnailKey, {
-              ContentType: 'image/jpeg',
-              ACL: 'public-read'
-            });
-            
-            // Clean up local thumbnail
-            fs.unlinkSync(thumbnailPath);
-          } catch (thumbnailError) {
-            console.error(`[${jobId}] Thumbnail generation/upload failed:`, thumbnailError);
-            // Fallback to first clip's thumbnail if available
-            thumbnailUrl = clipDetails[0]?.thumbnail || 'https://example.com/default-thumbnail.jpg';
-          }
+          // Generate thumbnail
+          const thumbnailUrl = await generateThumbnail(outputPath, jobId);
           
-          // Upload merged video to S3
+          // Upload to S3
           const s3Key = `merged-videos/${user.id}/${outputFileName}`;
           const s3Url = await uploadToS3(outputPath, s3Key, {
             ContentType: 'video/mp4',
             ACL: 'public-read'
           });
 
-          if (!s3Url) {
-            throw new Error('Failed to get S3 URL after upload');
-          }
-
-          // Save to database - ensure all required fields are included
+          // Save to database
           const finalVideo = new FinalVideo({
             userId: user.id,
             jobId,
@@ -189,7 +166,6 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
             description: videoInfo.description || '',
             duration: totalDuration,
             videoUrl: s3Url,
-            s3Url: s3Url, // Explicitly set both fields
             thumbnailUrl,
             userEmail: user.email,
             userName: user.name,
@@ -212,7 +188,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
 
           await finalVideo.save();
 
-          // Clean up temporary files
+          // Clean up
           fs.rmSync(tempJobDir, { recursive: true, force: true });
           fs.unlinkSync(outputPath, (err) => {
             if (err) console.error(`[${jobId}] Error deleting output file:`, err);
@@ -253,6 +229,20 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
     console.error(`[${jobId}] Merge clips error:`, error);
     throw error;
   }
+};
+
+/**
+ * Generates a thumbnail from a video file
+ * @param {string} videoPath - Path to the video file
+ * @param {string} jobId - Job ID for logging
+ * @returns {Promise<string>} - URL of the generated thumbnail
+ */
+
+
+// Helper function to generate thumbnail (implement your actual thumbnail generation)
+const generateThumbnail = async (videoPath) => {
+  // Implement your thumbnail generation logic
+  return 'https://example.com/default-thumbnail.jpg';
 };
 
 module.exports = {

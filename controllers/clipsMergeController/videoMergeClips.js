@@ -15,7 +15,6 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const resolveVideoPath = (filePath) => {
   if (path.isAbsolute(filePath)) return filePath;
 
-  // Production paths
   if (process.env.RAILWAY_ENVIRONMENT === 'production') {
     const productionPaths = [
       path.join('/backend/uploads', path.basename(filePath)),
@@ -27,7 +26,6 @@ const resolveVideoPath = (filePath) => {
     }
   }
 
-  // Development path
   const devPath = path.join(__dirname, '../../uploads', path.basename(filePath));
   if (fs.existsSync(devPath)) return devPath;
 
@@ -39,7 +37,7 @@ const generateThumbnail = async (videoPath, outputPath) => {
     ffmpeg(videoPath)
       .screenshots({
         count: 1,
-        timemarks: ['00:00:01.000'],
+        timemarks: ['50%'], // Capture from middle of video
         filename: path.basename(outputPath),
         folder: path.dirname(outputPath),
         size: '320x180'
@@ -93,6 +91,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
     return new Promise((resolve, reject) => {
       const command = ffmpeg();
       let ffmpegProcess;
+      let timeout;
 
       // Add inputs with time trimming
       clipDetails.forEach(clip => {
@@ -101,7 +100,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
           .inputOptions([`-to ${clip.endTime}`]);
       });
 
-      // Configure merge
+      // Configure merge with robust settings
       command.complexFilter([
         {
           filter: 'concat',
@@ -109,7 +108,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
             n: clipDetails.length, 
             v: 1, 
             a: 1,
-            unsafe: 1 // Allows non-matching formats
+            unsafe: 1
           },
           outputs: ['v', 'a']
         }
@@ -118,21 +117,32 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         '-map', '[v]',
         '-map', '[a]',
         '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '22',
+        '-preset', 'medium', // More reliable than 'fast'
+        '-crf', '23',
         '-movflags', '+faststart',
         '-pix_fmt', 'yuv420p',
-        '-max_muxing_queue_size', '1024', // Prevents muxing errors
-        '-threads', '2' // Limits resource usage
+        '-max_muxing_queue_size', '9999', // Increased buffer
+        '-threads', '1', // Single thread for stability
+        '-vsync', 'vfr', // Better frame rate handling
+        '-async', '1' // Better audio sync
       ])
       .on('start', (cmd) => {
         console.log(`[${jobId}] FFmpeg command:`, cmd);
         ffmpegProcess = cmd;
+        
+        // Set timeout to detect hangs (30 minutes)
+        timeout = setTimeout(() => {
+          if (ffmpegProcess) {
+            console.error(`[${jobId}] Process timeout - killing FFmpeg`);
+            process.kill(ffmpegProcess.pid, 'SIGKILL');
+          }
+        }, 30 * 60 * 1000);
       })
       .on('progress', (progress) => {
         console.log(`[${jobId}] Progress: ${Math.round(progress.percent || 0)}%`);
       })
       .on('end', async () => {
+        clearTimeout(timeout);
         try {
           console.log(`[${jobId}] Merge successful`);
           
@@ -205,6 +215,7 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         }
       })
       .on('error', (err, stdout, stderr) => {
+        clearTimeout(timeout);
         console.error(`[${jobId}] FFmpeg error:`, err);
         console.error(`[${jobId}] FFmpeg stdout:`, stdout);
         console.error(`[${jobId}] FFmpeg stderr:`, stderr);

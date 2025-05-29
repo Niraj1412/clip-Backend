@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const Video = require('../../model/uploadVideosSchema');
 const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
-const { generateThumbnail } = require('../../utils/thumbnailGenerator'); // Import your thumbnail generator
+const { generateThumbnail } = require('../videosController/thumbnailGenerator'); // Import your thumbnail generator
 
 // Configure FFmpeg path based on environment
 const ffmpegPath = process.env.NODE_ENV === 'production' 

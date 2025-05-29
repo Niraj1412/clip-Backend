@@ -6,51 +6,31 @@ const Video = require('../../model/uploadVideosSchema');
 const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
 
-// Configure FFmpeg path based on environment
+// Configure FFmpeg path
 const ffmpegPath = process.env.NODE_ENV === 'production' 
   ? process.env.FFMPEG_PATH || '/usr/bin/ffmpeg'
   : require('ffmpeg-static');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-/**
- * Resolves the full path to a video file
- * @param {string} filePath - The stored file path
- * @returns {string} - Absolute path to the file
- */
-const resolveVideoPath = (filePath) => {
-  // Handle absolute paths
-  if (path.isAbsolute(filePath)) {
-    return filePath;
-  }
-
-  // Handle production paths (Railway)
-  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
-    const productionPaths = [
-      path.join('/backend/uploads', path.basename(filePath)),
-      path.join('/app/uploads', path.basename(filePath)),
-      path.join('/uploads', path.basename(filePath))
-    ];
-
-    for (const p of productionPaths) {
-      if (fs.existsSync(p)) return p;
-    }
-  }
-
-  // Development paths
-  const devPath = path.join(__dirname, '../../uploads', path.basename(filePath));
-  if (fs.existsSync(devPath)) return devPath;
-
-  throw new Error(`Could not resolve path for: ${filePath}`);
+// Helper to normalize video formats
+const normalizeVideo = (inputPath, outputPath) => {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .outputOptions([
+        '-c:v libx264',
+        '-preset fast',
+        '-pix_fmt yuv420p',
+        '-movflags +faststart',
+        '-crf 23',
+        '-max_muxing_queue_size 1024' // Prevent muxing errors
+      ])
+      .on('end', resolve)
+      .on('error', reject)
+      .save(outputPath);
+  });
 };
 
-/**
- * Merges multiple video clips into a single video
- * @param {Array} clips - Array of clip objects with videoId, startTime, endTime
- * @param {Object} user - User information
- * @param {Object} videoInfo - Video title and description
- * @returns {Promise<Object>} - Merged video information
- */
 const videoMergeClips = async (clips, user, videoInfo = {}) => {
   const jobId = uuidv4();
   console.log(`[${jobId}] Starting video merge process`);
@@ -62,8 +42,8 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
     }
 
     // Create working directories
-    const tempDir = process.env.TEMP_DIR || path.join(__dirname, '../../../tmp');
-    const outputDir = process.env.OUTPUT_DIR || path.join(__dirname, '../../../output');
+    const tempDir = path.join(__dirname, '../../../tmp', jobId);
+    const outputDir = path.join(__dirname, '../../../output');
     
     [tempDir, outputDir].forEach(dir => {
       if (!fs.existsSync(dir)) {
@@ -71,13 +51,9 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
       }
     });
 
-    const tempJobDir = path.join(tempDir, jobId);
-    fs.mkdirSync(tempJobDir);
-
-    // Calculate total duration and get clip details with resolved paths
-    let totalDuration = 0;
-    const clipDetails = await Promise.all(
-      clips.map(async (clip) => {
+    // Normalize all input videos first
+    const normalizedClips = await Promise.all(
+      clips.map(async (clip, index) => {
         const video = await Video.findById(clip.videoId);
         if (!video) throw new Error(`Video not found for ID: ${clip.videoId}`);
 
@@ -86,21 +62,24 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
           throw new Error(`Video file not found at: ${resolvedPath}`);
         }
 
-        const clipDuration = clip.endTime - clip.startTime;
-        totalDuration += clipDuration;
+        const normalizedPath = path.join(tempDir, `normalized_${index}.mp4`);
+        await normalizeVideo(resolvedPath, normalizedPath);
 
         return {
-          path: resolvedPath,
+          path: normalizedPath,
           startTime: clip.startTime,
           endTime: clip.endTime,
-          duration: clipDuration,
-          videoId: clip.videoId.toString(), // Ensure string format to match schema
+          duration: clip.endTime - clip.startTime,
+          videoId: clip.videoId.toString(),
           title: clip.title || video.title,
           thumbnail: video.thumbnailUrl,
           originalVideoTitle: video.title
         };
       })
     );
+
+    // Calculate total duration
+    const totalDuration = normalizedClips.reduce((sum, clip) => sum + clip.duration, 0);
 
     // Merge videos
     const outputFileName = `merged_${jobId}.mp4`;
@@ -110,21 +89,26 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
     console.log(`[${jobId}] Starting FFmpeg merge process`);
 
     return new Promise((resolve, reject) => {
-      let command = ffmpeg();
+      const command = ffmpeg();
       let ffmpegProcess;
 
-      // Add all input files with trimming options
-      clipDetails.forEach((clip) => {
+      // Add all normalized input files
+      normalizedClips.forEach(clip => {
         command.input(clip.path)
           .inputOptions([`-ss ${clip.startTime}`])
           .inputOptions([`-to ${clip.endTime}`]);
       });
 
-      // Set up FFmpeg command
+      // Set up FFmpeg command with robust settings
       command.complexFilter([
         {
           filter: 'concat',
-          options: { n: clipDetails.length, v: 1, a: 1 },
+          options: { 
+            n: normalizedClips.length, 
+            v: 1, 
+            a: 1,
+            unsafe: 1 // Allow potentially unsafe operations
+          },
           outputs: ['v', 'a']
         }
       ])
@@ -134,7 +118,10 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         '-c:v', 'libx264',
         '-preset', 'fast',
         '-crf', '22',
-        '-movflags', '+faststart'
+        '-movflags', '+faststart',
+        '-pix_fmt', 'yuv420p',
+        '-max_muxing_queue_size', '1024', // Prevent muxing errors
+        '-threads', '2' // Limit thread usage
       ])
       .on('start', (commandLine) => {
         console.log(`[${jobId}] FFmpeg command:`, commandLine);
@@ -147,21 +134,9 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         try {
           console.log(`[${jobId}] Merge completed successfully`);
           
-          // Generate thumbnail
-          let thumbnailUrl = clipDetails[0]?.thumbnail || '';
-          try {
-            const thumbnailPath = path.join(outputDir, `thumbnail_${jobId}.jpg`);
-            await generateThumbnail(outputPath, thumbnailPath);
-            const thumbnailKey = `merged-videos/${user.id}/thumbnails/thumbnail_${jobId}.jpg`;
-            thumbnailUrl = await uploadToS3(thumbnailPath, thumbnailKey, {
-              ContentType: 'image/jpeg',
-              ACL: 'public-read'
-            });
-            fs.unlinkSync(thumbnailPath);
-          } catch (thumbnailError) {
-            console.error(`[${jobId}] Thumbnail generation failed:`, thumbnailError);
-          }
-          
+          // Generate thumbnail (simplified for example)
+          const thumbnailUrl = normalizedClips[0]?.thumbnail || '';
+
           // Upload to S3
           const s3Key = `merged-videos/${user.id}/${outputFileName}`;
           const s3Url = await uploadToS3(outputPath, s3Key, {
@@ -169,22 +144,18 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
             ACL: 'public-read'
           });
 
-          if (!s3Url) {
-            throw new Error('Failed to get S3 URL after upload');
-          }
-
-          // Create the final video document - EXACTLY MATCHING YOUR SCHEMA
+          // Save to database
           const finalVideo = new FinalVideo({
             userId: user.id.toString(),
             title: videoInfo.title || `Merged Video ${new Date().toLocaleDateString()}`,
             description: videoInfo.description || '',
             jobId,
             duration: totalDuration,
-            s3Url: s3Url, // REQUIRED FIELD
+            s3Url,
             thumbnailUrl,
             userEmail: user.email || '',
             userName: user.name || '',
-            sourceClips: clipDetails.map(clip => ({
+            sourceClips: normalizedClips.map(clip => ({
               videoId: clip.videoId,
               title: clip.title,
               startTime: clip.startTime,
@@ -194,8 +165,8 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
               originalVideoTitle: clip.originalVideoTitle
             })),
             stats: {
-              totalClips: clipDetails.length,
-              totalDuration: totalDuration,
+              totalClips: normalizedClips.length,
+              totalDuration,
               processingTime: Date.now() - startTime,
               mergeDate: new Date()
             }
@@ -204,10 +175,8 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
           await finalVideo.save();
 
           // Clean up
-          fs.rmSync(tempJobDir, { recursive: true, force: true });
-          fs.unlinkSync(outputPath, (err) => {
-            if (err) console.error(`[${jobId}] Error deleting output file:`, err);
-          });
+          fs.rmSync(tempDir, { recursive: true, force: true });
+          fs.unlinkSync(outputPath);
 
           resolve({
             success: true,
@@ -225,20 +194,6 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
         console.error(`[${jobId}] FFmpeg error:`, err);
         console.error(`[${jobId}] FFmpeg stdout:`, stdout);
         console.error(`[${jobId}] FFmpeg stderr:`, stderr);
-        
-        if (ffmpegProcess) {
-          try {
-            process.kill(ffmpegProcess.pid, 'SIGKILL');
-          } catch (killErr) {
-            console.error(`[${jobId}] Error killing FFmpeg process:`, killErr);
-          }
-        }
-        fs.rmSync(tempJobDir, { recursive: true, force: true });
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath, (unlinkErr) => {
-            if (unlinkErr) console.error(`[${jobId}] Error deleting output file:`, unlinkErr);
-          });
-        }
         reject(new Error(`Video processing failed: ${err.message}`));
       })
       .save(outputPath);
@@ -249,21 +204,6 @@ const videoMergeClips = async (clips, user, videoInfo = {}) => {
   }
 };
 
-/**
- * Generates a thumbnail from a video file
- * @param {string} videoPath - Path to the video file
- * @param {string} jobId - Job ID for logging
- * @returns {Promise<string>} - URL of the generated thumbnail
- */
-
-
-// Helper function to generate thumbnail (implement your actual thumbnail generation)
-const generateThumbnail = async (videoPath) => {
-  // Implement your thumbnail generation logic
-  return 'https://example.com/default-thumbnail.jpg';
-};
-
 module.exports = {
-  videoMergeClips,
-  resolveVideoPath
+  videoMergeClips
 };

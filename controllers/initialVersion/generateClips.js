@@ -10,15 +10,17 @@ if (!GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// More accurate token counting function for Gemini models
+// Track rate limits
+let lastRequestTime = 0;
+const REQUEST_DELAY = 1000; // 1 second delay between requests for free tier
+
+// More accurate token counting function
 const countTokens = (text) => {
-    // A rough approximation: 1 token is roughly 4 characters for English text
     return Math.ceil(text.length / 4);
 };
 
 // Create chunks based on a maximum token count
 const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
-    // Reserve tokens for system message and other conversation elements
     const reservedTokens = 5000;
     const effectiveMaxTokens = maxTokensPerChunk - reservedTokens;
     
@@ -61,36 +63,67 @@ const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
     return chunks;
 };
 
-// Sleep function for rate limit handling
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Make Gemini API call with retry logic for rate limits
-const callGeminiWithRetry = async (messages, modelName, temperature, maxRetries = 3) => {
+// Enhanced rate limit handling
+const callGeminiWithRetry = async (messages, modelName, temperature, maxRetries = 5) => {
     let retries = 0;
     const model = genAI.getGenerativeModel({ model: modelName });
     
     while (retries <= maxRetries) {
         try {
-            // Convert OpenAI-style messages to Gemini format
+            // Enforce rate limiting
+            const now = Date.now();
+            const timeSinceLastRequest = now - lastRequestTime;
+            
+            if (timeSinceLastRequest < REQUEST_DELAY) {
+                const delay = REQUEST_DELAY - timeSinceLastRequest;
+                console.log(`Rate limiting: Waiting ${delay}ms before next request`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            
+            // Convert messages to Gemini format
             const geminiMessages = messages.map(msg => ({
                 role: msg.role === 'assistant' ? 'model' : 'user',
                 parts: [{ text: msg.content }]
             }));
             
             const chat = model.startChat({
-                history: geminiMessages.slice(0, -1), // All except last message as history
-                generationConfig: { temperature }
+                history: geminiMessages.slice(0, -1),
+                generationConfig: { 
+                    temperature,
+                    maxOutputTokens: 4000 // Limit output size to stay within quotas
+                }
             });
             
+            lastRequestTime = Date.now();
             const result = await chat.sendMessage(geminiMessages[geminiMessages.length - 1].parts[0].text);
             const response = await result.response;
             return response.text();
         } catch (error) {
-            if ((error.message.includes('quota') || error.message.includes('rate')) && retries < maxRetries) {
-                const retryAfterMs = Math.pow(2, retries) * 1000;
-                console.log(`Rate limit reached. Retrying in ${retryAfterMs/1000} seconds...`);
-                await sleep(retryAfterMs);
-                retries++;
+            if (error.status === 429) {
+                // Parse the retry delay from the error if available
+                let retryAfter = 60000; // Default 1 minute
+                
+                try {
+                    const retryInfo = error.errorDetails?.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+                    if (retryInfo && retryInfo.retryDelay) {
+                        const match = retryInfo.retryDelay.match(/(\d+)s/);
+                        if (match) {
+                            retryAfter = parseInt(match[1]) * 1000;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error parsing retry info:', e);
+                }
+                
+                if (retries < maxRetries) {
+                    console.log(`Rate limit exceeded. Retrying after ${retryAfter/1000} seconds... (Attempt ${retries + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, retryAfter));
+                    retries++;
+                } else {
+                    throw new Error(`Rate limit exceeded after ${maxRetries} retries. Please try again later or upgrade your plan.`);
+                }
+            } else if (error.message.includes('quota')) {
+                throw new Error('You have exceeded your daily quota. Please check your billing or try again tomorrow.');
             } else {
                 throw error;
             }
@@ -115,7 +148,8 @@ const generateClips = async (req, res) => {
         const totalTokens = countTokens(allTranscriptsJson);
         console.log(`Total estimated tokens in all transcripts: ${totalTokens}`);
 
-        const transcriptChunks = createTokenAwareChunks(transcripts, 40000);
+        // Reduce chunk size to stay within free tier limits
+        const transcriptChunks = createTokenAwareChunks(transcripts, 20000);
         console.log(`Split transcripts into ${transcriptChunks.length} token-aware chunks`);
         
         transcriptChunks.forEach((chunk, idx) => {
@@ -295,28 +329,14 @@ Remember: Return ONLY a valid JSON array with proper numeric values (no expressi
                     console.log(`Chunk ${i+1} processed successfully`);
                 }
                 
-            } catch (geminiError) {
-                console.error(`Gemini API error on chunk ${i+1}:`, geminiError);
+            } catch (error) {
+                console.error(`Error processing chunk ${i+1}:`, error);
                 
-                if (geminiError.message.includes('content')) {
-                    return res.status(500).json({
-                        success: false,
-                        message: "Gemini content policy violation. Please check your input.",
-                        error: geminiError.message
-                    });
-                } else if (geminiError.message.includes('quota') || geminiError.message.includes('rate')) {
-                    return res.status(500).json({
-                        success: false,
-                        message: "Gemini API rate limit exceeded. Please try again later.",
-                        error: geminiError.message
-                    });
-                } else {
-                    return res.status(500).json({
-                        success: false,
-                        message: `Gemini API error on chunk ${i+1}`,
-                        error: geminiError.message
-                    });
-                }
+                return res.status(500).json({
+                    success: false,
+                    message: error.message || "Failed to generate video script",
+                    error: error.message
+                });
             }
         }
     } catch (error) {

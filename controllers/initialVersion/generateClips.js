@@ -12,7 +12,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 // More accurate token counting function for Gemini models
 const countTokens = (text) => {
-    // Gemini uses similar tokenization to OpenAI, roughly 4 chars per token
+    // A rough approximation: 1 token is roughly 4 characters for English text
     return Math.ceil(text.length / 4);
 };
 
@@ -65,17 +65,28 @@ const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Make Gemini API call with retry logic for rate limits
-const callGeminiWithRetry = async (prompt, modelName, temperature, maxRetries = 3) => {
+const callGeminiWithRetry = async (messages, modelName, temperature, maxRetries = 3) => {
     let retries = 0;
     const model = genAI.getGenerativeModel({ model: modelName });
     
     while (retries <= maxRetries) {
         try {
-            const result = await model.generateContent(prompt);
+            // Convert OpenAI-style messages to Gemini format
+            const geminiMessages = messages.map(msg => ({
+                role: msg.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: msg.content }]
+            }));
+            
+            const chat = model.startChat({
+                history: geminiMessages.slice(0, -1), // All except last message as history
+                generationConfig: { temperature }
+            });
+            
+            const result = await chat.sendMessage(geminiMessages[geminiMessages.length - 1].parts[0].text);
             const response = await result.response;
             return response.text();
         } catch (error) {
-            if (error.message.includes('quota') || error.message.includes('rate') && retries < maxRetries) {
+            if ((error.message.includes('quota') || error.message.includes('rate')) && retries < maxRetries) {
                 const retryAfterMs = Math.pow(2, retries) * 1000;
                 console.log(`Rate limit reached. Retrying in ${retryAfterMs/1000} seconds...`);
                 await sleep(retryAfterMs);
@@ -89,7 +100,7 @@ const callGeminiWithRetry = async (prompt, modelName, temperature, maxRetries = 
 
 const generateClips = async (req, res) => {
     try {
-        const { transcripts, customPrompt, customization } = req.body;
+        const { transcripts, customPrompt } = req.body;
 
         if (!transcripts || !Array.isArray(transcripts) || transcripts.length === 0) {
             return res.status(400).json({
@@ -119,6 +130,25 @@ const generateClips = async (req, res) => {
             const chunk = transcriptChunks[i];
             const isFirstChunk = i === 0;
             const isLastChunk = i === transcriptChunks.length - 1;
+            
+            const messages = [
+                {
+                    role: "system",
+                    content: "You are a precise transcript processor and master storyteller with an emphasis on narrative cohesion and accuracy. When generating clips, you must maintain the exact wording from the source material while creating a compelling narrative flow. Never modify, paraphrase, or correct the original transcript text. Your task is to identify the most meaningful segments across transcripts and weave them into a coherent story. Produce only valid JSON arrays with accurate numeric values and exact transcript quotes. Accuracy and fidelity to the original content remain your highest priority while creating an engaging storyline."
+                }
+            ];
+            
+            if (potentialSegments.length > 0 && !isFirstChunk) {
+                messages.push({
+                    role: "user",
+                    content: `Important segments identified from previous chunks (for reference only):\n${JSON.stringify(potentialSegments, null, 2)}`
+                });
+                
+                messages.push({
+                    role: "assistant",
+                    content: "I've noted these important segments from previous chunks and will consider them as I analyze the next chunk."
+                });
+            }
             
             let chunkPrompt;
             
@@ -173,7 +203,7 @@ RULES:
    - Add 2.00 second buffer at end
    - Minimum 0.50 second gap between clips
    - Duration: 3.00-60.00 seconds
-   - No overlapping segments
+   - No overlapping segments, if a clip has 6.00 to 10.00, the other clip shouldn't starting time 6.00 to 10.00 !important
 
 2. CONTENT ACCURACY:
    - Use EXACT quotes from transcripts without modification
@@ -189,6 +219,14 @@ RULES:
    - Ensure the assembled clips tell a compelling, unified story
    - Identify and highlight key narrative elements across transcripts
 
+4. SELECTION CRITERIA:
+   - Maintain narrative flow and story progression
+   - Focus on relevant, meaningful content
+   - Remove filler content and digressions
+   - Prioritize clarity and articulation
+   - Select segments with clear speech and minimal background noise
+   - Choose segments that contribute meaningfully to the story arc
+
 Here are the important segments from previous chunks:
 ${JSON.stringify(potentialSegments, null, 2)}
 
@@ -198,36 +236,26 @@ ${JSON.stringify(chunk, null, 2)}
 Remember: Return ONLY a valid JSON array with proper numeric values (no expressions). While creating a compelling narrative is important, transcript accuracy is still the highest priority.`;
             }
 
-            // Add customization if provided
-            if (customization) {
-                chunkPrompt += `
-
-Style this selection according to:
-- Tone: ${customization.tone}
-- Length: ${customization.length}
-- Style: ${customization.style}
-
-Maintain the same JSON structure while incorporating these style preferences.`;
-            }
-
             const promptTokens = countTokens(chunkPrompt);
             console.log(`Chunk ${i+1} prompt: ~${promptTokens} tokens`);
+
+            messages.push({
+                role: "user",
+                content: chunkPrompt
+            });
 
             console.log(`Processing chunk ${i+1}/${transcriptChunks.length}...`);
             
             try {
-                // Call Gemini with retry logic for rate limits
                 const responseContent = await callGeminiWithRetry(
-                    chunkPrompt,
-                    "gemini-1.5-pro-latest", // Using the latest Gemini 1.5 Pro model
+                    messages,
+                    "gemini-1.5-pro-latest",
                     0.2
                 );
 
-                // If this is the last chunk, we have the final result
                 if (isLastChunk) {
                     console.log("Final response received from Gemini");
 
-                    // Extract the JSON portion from the response
                     let jsonMatch;
                     try {
                         jsonMatch = responseContent.match(/\[\s*\{.*\}\s*\]/s);
@@ -251,7 +279,6 @@ Maintain the same JSON structure while incorporating these style preferences.`;
                         });
                     }
                 } else {
-                    // For non-final chunks, extract important segments
                     try {
                         const jsonMatch = responseContent.match(/\[\s*\{.*\}\s*\]/s);
                         if (jsonMatch) {

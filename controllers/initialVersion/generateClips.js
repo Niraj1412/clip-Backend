@@ -1,26 +1,28 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const OpenAI = require("openai");
 const dotenv = require('dotenv');
 dotenv.config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!GEMINI_API_KEY) {
-    console.error('Gemini API key is missing. Please check your .env file.');
+if (!OPENAI_API_KEY) {
+    console.error('OpenAI API key is missing. Please check your .env file.');
 }
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const openai = new OpenAI({
+    apiKey: OPENAI_API_KEY,
+    dangerouslyAllowBrowser: true
+});
 
-// Track rate limits
-let lastRequestTime = 0;
-const REQUEST_DELAY = 1000; // 1 second delay between requests for free tier
-
-// More accurate token counting function
+// More accurate token counting function for OpenAI models
 const countTokens = (text) => {
+    // A rough approximation: 1 token is roughly 4 characters for English text
+    // This is still an approximation; for production, consider using a tokenizer library
     return Math.ceil(text.length / 4);
 };
 
 // Create chunks based on a maximum token count
 const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
+    // Reserve tokens for system message and other conversation elements
     const reservedTokens = 5000;
     const effectiveMaxTokens = maxTokensPerChunk - reservedTokens;
     
@@ -33,29 +35,36 @@ const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
         const transcriptJson = JSON.stringify(transcript, null, 2);
         const transcriptTokens = countTokens(transcriptJson);
         
+        // If a single transcript exceeds the effective max tokens,
+        // we need to include it alone (can't split JSON objects easily)
         if (transcriptTokens > effectiveMaxTokens) {
             console.warn(`Transcript at index ${i} exceeds token limit (${transcriptTokens} tokens). Including it as a single chunk.`);
             
+            // If we have items in the current chunk, finalize it first
             if (currentChunk.length > 0) {
                 chunks.push([...currentChunk]);
                 currentChunk = [];
                 currentChunkTokens = 0;
             }
             
+            // Add the large transcript as its own chunk
             chunks.push([transcript]);
             continue;
         }
         
+        // If adding this transcript would exceed the token limit, finalize the current chunk
         if (currentChunkTokens + transcriptTokens > effectiveMaxTokens && currentChunk.length > 0) {
             chunks.push([...currentChunk]);
             currentChunk = [];
             currentChunkTokens = 0;
         }
         
+        // Add the transcript to the current chunk
         currentChunk.push(transcript);
         currentChunkTokens += transcriptTokens;
     }
     
+    // Add any remaining transcripts in the current chunk
     if (currentChunk.length > 0) {
         chunks.push(currentChunk);
     }
@@ -63,68 +72,35 @@ const createTokenAwareChunks = (transcripts, maxTokensPerChunk = 40000) => {
     return chunks;
 };
 
-// Enhanced rate limit handling
-const callGeminiWithRetry = async (messages, modelName, temperature, maxRetries = 5) => {
+// Sleep function for rate limit handling
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Make OpenAI API call with retry logic for rate limits
+const callOpenAIWithRetry = async (messages, model, temperature, maxRetries = 3) => {
     let retries = 0;
-    const model = genAI.getGenerativeModel({ model: modelName });
     
     while (retries <= maxRetries) {
         try {
-            // Enforce rate limiting
-            const now = Date.now();
-            const timeSinceLastRequest = now - lastRequestTime;
-            
-            if (timeSinceLastRequest < REQUEST_DELAY) {
-                const delay = REQUEST_DELAY - timeSinceLastRequest;
-                console.log(`Rate limiting: Waiting ${delay}ms before next request`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-            
-            // Convert messages to Gemini format
-            const geminiMessages = messages.map(msg => ({
-                role: msg.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: msg.content }]
-            }));
-            
-            const chat = model.startChat({
-                history: geminiMessages.slice(0, -1),
-                generationConfig: { 
-                    temperature,
-                    maxOutputTokens: 4000 // Limit output size to stay within quotas
-                }
+            const result = await openai.chat.completions.create({
+                messages: messages,
+                model: model,
+                temperature: temperature,
             });
             
-            lastRequestTime = Date.now();
-            const result = await chat.sendMessage(geminiMessages[geminiMessages.length - 1].parts[0].text);
-            const response = await result.response;
-            return response.text();
+            return result;
         } catch (error) {
-            if (error.status === 429) {
-                // Parse the retry delay from the error if available
-                let retryAfter = 60000; // Default 1 minute
+            // Check if it's a rate limit error
+            if (error.error?.code === 'rate_limit_exceeded' && retries < maxRetries) {
+                // Get retry time from header or use exponential backoff
+                const retryAfterMs = error.headers?.['retry-after-ms'] 
+                    ? parseInt(error.headers['retry-after-ms'])
+                    : Math.pow(2, retries) * 1000; // Exponential backoff: 1s, 2s, 4s, ...
                 
-                try {
-                    const retryInfo = error.errorDetails?.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
-                    if (retryInfo && retryInfo.retryDelay) {
-                        const match = retryInfo.retryDelay.match(/(\d+)s/);
-                        if (match) {
-                            retryAfter = parseInt(match[1]) * 1000;
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error parsing retry info:', e);
-                }
-                
-                if (retries < maxRetries) {
-                    console.log(`Rate limit exceeded. Retrying after ${retryAfter/1000} seconds... (Attempt ${retries + 1}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, retryAfter));
-                    retries++;
-                } else {
-                    throw new Error(`Rate limit exceeded after ${maxRetries} retries. Please try again later or upgrade your plan.`);
-                }
-            } else if (error.message.includes('quota')) {
-                throw new Error('You have exceeded your daily quota. Please check your billing or try again tomorrow.');
+                console.log(`Rate limit reached. Retrying in ${retryAfterMs/1000} seconds...`);
+                await sleep(retryAfterMs);
+                retries++;
             } else {
+                // For other errors or if we've exhausted retries, throw the error
                 throw error;
             }
         }
@@ -144,27 +120,32 @@ const generateClips = async (req, res) => {
 
         console.log("Generating clips from transcripts:", transcripts.length);
         
+        // Calculate total tokens in all transcripts
         const allTranscriptsJson = JSON.stringify(transcripts, null, 2);
         const totalTokens = countTokens(allTranscriptsJson);
         console.log(`Total estimated tokens in all transcripts: ${totalTokens}`);
 
-        // Reduce chunk size to stay within free tier limits
-        const transcriptChunks = createTokenAwareChunks(transcripts, 20000);
+        // Split transcripts into smaller token-aware chunks (max 40k tokens per chunk)
+        const transcriptChunks = createTokenAwareChunks(transcripts, 40000);
         console.log(`Split transcripts into ${transcriptChunks.length} token-aware chunks`);
         
+        // Log token counts for each chunk
         transcriptChunks.forEach((chunk, idx) => {
             const chunkJson = JSON.stringify(chunk, null, 2);
             const chunkTokens = countTokens(chunkJson);
             console.log(`Chunk ${idx+1}: ${chunk.length} transcripts, ~${chunkTokens} tokens`);
         });
 
+        // Array to store important segments identified in each chunk
         let potentialSegments = [];
         
+        // Process each chunk separately, maintaining a summary of important segments
         for (let i = 0; i < transcriptChunks.length; i++) {
             const chunk = transcriptChunks[i];
             const isFirstChunk = i === 0;
             const isLastChunk = i === transcriptChunks.length - 1;
             
+            // Reset messages for each chunk to avoid token limit
             const messages = [
                 {
                     role: "system",
@@ -172,6 +153,7 @@ const generateClips = async (req, res) => {
                 }
             ];
             
+            // If we have potential segments from previous chunks, include them
             if (potentialSegments.length > 0 && !isFirstChunk) {
                 messages.push({
                     role: "user",
@@ -187,6 +169,7 @@ const generateClips = async (req, res) => {
             let chunkPrompt;
             
             if (!isLastChunk) {
+                // Processing chunks (first or middle) - identify important segments
                 chunkPrompt = `
 USER CONTEXT: ${customPrompt || "Generate engaging clips from the transcript with accurate timestamps."}
 
@@ -211,6 +194,7 @@ Return the segments as a JSON array in this format:
 Transcript Chunk ${i+1}/${transcriptChunks.length}:
 ${JSON.stringify(chunk, null, 2)}`;
             } else {
+                // Last chunk - generate the final output
                 chunkPrompt = `
 USER CONTEXT: ${customPrompt || "Generate engaging clips from the transcript with accurate timestamps."}
 
@@ -270,9 +254,11 @@ ${JSON.stringify(chunk, null, 2)}
 Remember: Return ONLY a valid JSON array with proper numeric values (no expressions). While creating a compelling narrative is important, transcript accuracy is still the highest priority.`;
             }
 
+            // Calculate token count for this chunk's prompt
             const promptTokens = countTokens(chunkPrompt);
             console.log(`Chunk ${i+1} prompt: ~${promptTokens} tokens`);
 
+            // Add the current chunk prompt to the conversation
             messages.push({
                 role: "user",
                 content: chunkPrompt
@@ -281,20 +267,36 @@ Remember: Return ONLY a valid JSON array with proper numeric values (no expressi
             console.log(`Processing chunk ${i+1}/${transcriptChunks.length}...`);
             
             try {
-                const responseContent = await callGeminiWithRetry(
-                    messages,
-                    "gemini-1.5-pro-latest",
+                // Call OpenAI with retry logic for rate limits
+                const result = await callOpenAIWithRetry(
+                    messages, 
+                    "gpt-4o-mini-2024-07-18", 
                     0.2
                 );
 
-                if (isLastChunk) {
-                    console.log("Final response received from Gemini");
+                // Get token usage information if available
+                if (result.usage) {
+                    console.log(`Chunk ${i+1} token usage:`, {
+                        promptTokens: result.usage.prompt_tokens,
+                        completionTokens: result.usage.completion_tokens,
+                        totalTokens: result.usage.total_tokens
+                    });
+                }
 
+                const responseContent = result.choices[0].message.content;
+
+                // If this is the last chunk, we have the final result
+                if (isLastChunk) {
+                    console.log("Final response received from OpenAI");
+
+                    // Extract the JSON portion from the response
                     let jsonMatch;
                     try {
+                        // Try to find JSON array in the response
                         jsonMatch = responseContent.match(/\[\s*\{.*\}\s*\]/s);
                         const jsonContent = jsonMatch ? jsonMatch[0] : responseContent;
                         
+                        // Validate the JSON
                         JSON.parse(jsonContent);
                         
                         return res.status(200).json({
@@ -305,7 +307,7 @@ Remember: Return ONLY a valid JSON array with proper numeric values (no expressi
                             message: "Video script generated successfully"
                         });
                     } catch (jsonError) {
-                        console.error("Invalid JSON response from Gemini:", responseContent);
+                        console.error("Invalid JSON response from OpenAI:", responseContent);
                         return res.status(500).json({
                             success: false,
                             message: "Failed to generate valid JSON response",
@@ -313,10 +315,13 @@ Remember: Return ONLY a valid JSON array with proper numeric values (no expressi
                         });
                     }
                 } else {
+                    // For non-final chunks, extract important segments and add to running list
                     try {
+                        // Try to extract JSON from response
                         const jsonMatch = responseContent.match(/\[\s*\{.*\}\s*\]/s);
                         if (jsonMatch) {
                             const segmentsFromChunk = JSON.parse(jsonMatch[0]);
+                            // Add to our running list, but limit to keep token count manageable
                             potentialSegments = [...potentialSegments, ...segmentsFromChunk].slice(-30);
                             console.log(`Added ${segmentsFromChunk.length} potential segments from chunk ${i+1}`);
                         } else {
@@ -324,19 +329,48 @@ Remember: Return ONLY a valid JSON array with proper numeric values (no expressi
                         }
                     } catch (error) {
                         console.warn(`Error parsing segments from chunk ${i+1}: ${error.message}`);
+                        // Continue processing even if we can't extract segments
                     }
                     
                     console.log(`Chunk ${i+1} processed successfully`);
                 }
                 
-            } catch (error) {
-                console.error(`Error processing chunk ${i+1}:`, error);
+            } catch (openaiError) {
+                console.error(`OpenAI API error on chunk ${i+1}:`, openaiError);
                 
-                return res.status(500).json({
-                    success: false,
-                    message: error.message || "Failed to generate video script",
-                    error: error.message
-                });
+                // Handle token limit errors specifically
+                if (openaiError.error && openaiError.error.code === 'context_length_exceeded') {
+                    console.error(`Token limit exceeded for chunk ${i+1}. Attempting to divide this chunk further.`);
+                    
+                    // If this is a large chunk that can't be processed, we could try dividing it further
+                    // For simplicity in this example, we'll just return an error
+                    return res.status(500).json({
+                        success: false,
+                        message: `Token limit exceeded for chunk ${i+1}. Please reduce the amount of transcript data.`,
+                        error: openaiError.message
+                    });
+                }
+                
+                // Handle other specific OpenAI errors
+                if (openaiError.status === 401) {
+                    return res.status(500).json({
+                        success: false,
+                        message: "OpenAI API authentication failed. Please check your API key.",
+                        error: openaiError.message
+                    });
+                } else if (openaiError.status === 429) {
+                    return res.status(500).json({
+                        success: false,
+                        message: "OpenAI API rate limit exceeded. Please try again later.",
+                        error: openaiError.message
+                    });
+                } else {
+                    return res.status(500).json({
+                        success: false,
+                        message: `OpenAI API error on chunk ${i+1}`,
+                        error: openaiError.message
+                    });
+                }
             }
         }
     } catch (error) {

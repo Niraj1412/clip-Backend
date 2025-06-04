@@ -3,6 +3,7 @@ const cors = require('cors');
 const { connectDB } = require('./db');
 const usersRoute = require('./routes/usersRoute');
 const clipsRoute = require('./routes/clipsRoute');
+const processRoute = require('./routes/processClip');
 const uploadRoute = require('./routes/uploadRoute');
 const initialVersionRoute = require('./routes/initialVersion');
 const mergeRoute = require('./routes/mergeRoute');
@@ -135,6 +136,7 @@ app.head('/temp/:jobId/merged.mp4', (req, res) => {
 // Routes
 app.use('/api/v1/auth', usersRoute);
 app.use('/api/clips', clipsRoute);
+app.use('/api', processRoute);
 app.use('/api/v1/upload', uploadRoute);
 app.use('/api/v1/youtube', initialVersionRoute);
 app.use('/api/merge', mergeRoute);

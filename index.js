@@ -137,15 +137,21 @@ app.head('/temp/:jobId/merged.mp4', (req, res) => {
 app.use('/api/v1/auth', usersRoute);
 app.use('/api/clips', clipsRoute);
 app.use('/api/v1/upload', uploadRoute);
+
+// ✅ Ensure these come BEFORE the generic /api/v1
 app.use('/api/v1/youtube', initialVersionRoute);
+app.use('/api/v1/video', videoRoutes);
+
 app.use('/api/merge', mergeRoute);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/health', healthRoute);
+
+// ✅ Catch-all /api/v1 AFTER specific routes
 app.use('/api/v1', (req, res, next) => {
   console.log(`Incoming API v1 request: ${req.method} ${req.path}`);
   next();
 }, processRoutes);
-app.use('/api/v1/video', videoRoutes);
+
 
 // Add this before your routes
 const thumbnailsDir = path.join(__dirname, 'backend', 'thumbnails');

@@ -35,30 +35,7 @@ router.get('/oauth2callback', async (req, res) => {
 });
 
 router.post("/playlist/:playlistId", getVideoIDByPlaylist);
-router.post("/video/:videoId", async (req, res) => {
-    try {
-        // First get video details to check if transcript is available
-        const videoDetails = await getVideoDetails(req.params.videoId);
-        
-        if (!videoDetails.captionStatus || videoDetails.captionStatus === 'disabled') {
-            return res.status(400).json({
-                message: "Transcripts are disabled for this video",
-                status: false,
-                videoDetails
-            });
-        }
-        
-        // If captions are available, proceed to get transcript
-        return getTranscript(req, res);
-    } catch (error) {
-        console.error("Error in video endpoint:", error);
-        return res.status(500).json({
-            message: "Failed to process video request",
-            error: error.message,
-            status: false
-        });
-    }
-});
+router.post("/video/:videoId", getTranscript);
 router.post("/generateClips", generateClips);
 router.post("/details/:videoId", getDetailsByVideoID);
 router.get("/download", processClip);

@@ -136,7 +136,7 @@ app.head('/temp/:jobId/merged.mp4', (req, res) => {
 // Routes
 app.use('/api/v1/auth', usersRoute);
 app.use('/api/clips', clipsRoute);
-app.use('/api', processRoute);
+
 app.use('/api/v1/upload', uploadRoute);
 app.use('/api/v1/youtube', initialVersionRoute);
 app.use('/api/merge', mergeRoute);

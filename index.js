@@ -145,7 +145,7 @@ app.use('/api/v1/video', videoRoutes);
 app.use('/api/merge', mergeRoute);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/health', healthRoute);
-
+app.use('/api', processRoute);
 // ✅ Catch-all /api/v1 AFTER specific routes
 app.use('/api/v1', (req, res, next) => {
   console.log(`Incoming API v1 request: ${req.method} ${req.path}`);

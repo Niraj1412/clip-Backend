@@ -4,8 +4,8 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 dotenv.config();
 
-const PYTHON_API = process.env.PYTHON_API || 'https://clip-py-backend-production.up.railway.app';
-const APPLICATION_URL = process.env.APPLICATION_URL || 'https://clip-backend-production.up.railway.app';
+const PYTHON_API = process.env.PYTHON_API || 'https://clip-py-backend-1.onrender.com';
+const APPLICATION_URL = process.env.APPLICATION_URL || 'https://clip-backend-f93c.onrender.com';
 
 // Configure global settings for Google APIs
 google.options({

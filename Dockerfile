@@ -11,23 +11,21 @@ RUN apt-get update && \
 # Install ffmpeg-static for fallback
 RUN npm install -g ffmpeg-static
 
+# Create app directory and set permissions properly from the start
 WORKDIR /app
+RUN mkdir -p uploads tmp output && \
+    chown -R node:node /app
 
-# Create necessary directories with proper permissions
-RUN mkdir -p /app/uploads && \
-    mkdir -p /app/tmp && \
-    mkdir -p /app/output
+# Copy package files first for better caching
+COPY --chown=node:node package*.json ./
 
-# Copy package files first (better caching)
-COPY package*.json . 
-
-# Install dependencies as root (needed for node_modules)
-RUN npm install
-
-# Now switch to non-root user for security
+# Switch to node user for npm install
 USER node
 
-# Copy application files with correct permissions
+# Install app dependencies
+RUN npm install
+
+# Copy app source with correct permissions
 COPY --chown=node:node . .
 
 # Environment variables for configuration
@@ -35,11 +33,6 @@ ENV UPLOADS_DIR=/app/uploads \
     TEMP_DIR=/app/tmp \
     OUTPUT_DIR=/app/output \
     NODE_ENV=production
-
-# Ensure the node user has write access to needed directories
-RUN chown -R node:node /app/uploads && \
-    chown -R node:node /app/tmp && \
-    chown -R node:node /app/output
 
 EXPOSE 4001
 

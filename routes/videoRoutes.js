@@ -43,14 +43,14 @@ router.get('/:videoId/transcript', async (req, res) => {
       });
     }
 
-    if (video.status !== 'processed') {
-      return res.status(423).json({
-        success: false,
-        error: 'Video processing not completed',
-        status: video.status,
-        processingCompletedAt: video.processingCompletedAt
-      });
-    }
+    if (video.status !== 'processed' && !video.transcript) {
+  return res.status(423).json({
+    success: false,
+    error: 'Video processing not completed',
+    status: video.status,
+    processingCompletedAt: video.processingCompletedAt
+  });
+}
 
     if (!video.transcript) {
       return res.status(404).json({ 

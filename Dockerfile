@@ -8,6 +8,9 @@ RUN apt-get update && \
     ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
+# Install ffmpeg-static for fallback
+RUN npm install -g ffmpeg-static
+
 WORKDIR /app
 
 COPY package*.json . 

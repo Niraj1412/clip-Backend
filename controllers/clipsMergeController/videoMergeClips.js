@@ -13,35 +13,72 @@ const ffmpegPath = process.env.NODE_ENV === 'production'
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const resolveVideoPath = (filePath) => {
-  if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
+  // First check if the path exists as-is (absolute or relative)
+  if (fs.existsSync(filePath)) return filePath;
+
+  // If absolute path doesn't exist but starts with /app, try without /app prefix
+  if (filePath.startsWith('/app/') && !fs.existsSync(filePath)) {
+    const nonDockerPath = filePath.replace('/app/', '/');
+    if (fs.existsSync(nonDockerPath)) return nonDockerPath;
+  }
+
+  // If path is relative, try with /app prefix (for Docker)
+  if (!path.isAbsolute(filePath)) {
+    const dockerPath = path.join('/app', filePath);
+    if (fs.existsSync(dockerPath)) return dockerPath;
+  }
 
   const filename = path.basename(filePath);
   const possiblePaths = [
-    path.join('/app/uploads', filename), // <--- Add this line for Docker (project root /uploads)
-    path.join('/app/backend/uploads', filename), // Docker absolute
-    path.join(process.cwd(), 'uploads', filename), // Project root uploads (Docker & local)
-    path.join(process.cwd(), 'backend', 'uploads', filename), // Local/Docker
-    path.join(__dirname, '../../uploads', filename), // Legacy
-    path.join(__dirname, '../../backend/uploads', filename), // Local dev
-    path.join('uploads', filename), // Relative
-    path.join(__dirname, '../../', 'uploads', filename),
-    path.join(__dirname, '..', '..', 'uploads', filename),
-    path.join(__dirname, 'uploads', filename)
+    // Primary production paths (Docker)
+    path.join('/app/uploads', filename),
+    path.join('/app', filePath),
+    
+    // Local development paths
+    path.join(process.cwd(), 'uploads', filename),
+    path.join(process.cwd(), filePath),
+    
+    // Common alternative paths
+    path.join(__dirname, '../../uploads', filename),
+    path.join(__dirname, '../../', filePath),
+    
+    // Relative paths
+    filePath,
+    path.join('uploads', filename)
   ];
 
+  // Special handling for paths starting with 'uploads/'
   if (filePath.startsWith('uploads/')) {
-    possiblePaths.push(path.join(__dirname, '../../', filePath));
-    possiblePaths.push(path.join(process.cwd(), filePath));
-    possiblePaths.push(path.join('/', filePath));
+    possiblePaths.push(
+      path.join('/app', filePath),          // Docker
+      path.join(process.cwd(), filePath),   // Local
+      path.join('/', filePath)              // Absolute
+    );
   }
 
-  possiblePaths.push(filePath);
-
+  // Check all possible paths
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      return p;
+    }
   }
 
-  throw new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
+  // Final attempt - check if file exists in parent directories
+  const parentPaths = [
+    path.join('..', filePath),
+    path.join('../..', filePath),
+    path.join('../../..', filePath)
+  ];
+
+  for (const p of parentPaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  throw new Error(`Could not resolve path for: ${filePath}\nTried:\n${
+    [...possiblePaths, ...parentPaths].join('\n')
+  }`);
 };
 
 const generateThumbnail = async (videoPath, outputPath) => {

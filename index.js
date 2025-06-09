@@ -20,6 +20,7 @@ const port = process.env.PORT || 4001;
 
 const payloadLimit = '50mb';
 
+app.set('trust proxy', true); 
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {

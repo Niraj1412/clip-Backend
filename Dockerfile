@@ -13,6 +13,11 @@ RUN npm install -g ffmpeg-static
 
 WORKDIR /app
 
+# Create necessary directories
+RUN mkdir -p /app/uploads && \
+    mkdir -p /app/tmp && \
+    mkdir -p /app/output
+
 COPY package*.json . 
 
 RUN npm install 

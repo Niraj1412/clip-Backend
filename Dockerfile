@@ -13,11 +13,28 @@ RUN npm install -g ffmpeg-static
 
 WORKDIR /app
 
-COPY package*.json . 
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/uploads && \
+    mkdir -p /app/tmp && \
+    mkdir -p /app/output && \
+    chown -R node:node /app/uploads && \
+    chown -R node:node /app/tmp && \
+    chown -R node:node /app/output
 
-RUN npm install 
+# Switch to non-root user for security
+USER node
 
-COPY . .
+COPY --chown=node:node package*.json . 
+
+RUN npm install
+
+COPY --chown=node:node . .
+
+# Environment variables for configuration
+ENV UPLOADS_DIR=/app/uploads \
+    TEMP_DIR=/app/tmp \
+    OUTPUT_DIR=/app/output \
+    NODE_ENV=production
 
 EXPOSE 4001
 

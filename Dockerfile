@@ -1,12 +1,13 @@
 FROM node:22
 
-# Install system dependencies
+# Install system dependencies including build tools for native modules
 RUN apt-get update && \
     apt-get install -y \
     python3 \
     python3-pip \
     ffmpeg \
-    wget && \
+    wget \
+    build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 # Create app directory structure
@@ -14,18 +15,17 @@ WORKDIR /app
 RUN mkdir -p /app/uploads /app/tmp /app/output && \
     chown -R node:node /app
 
-# Copy package files first
+# Copy package files first for better caching
 COPY --chown=node:node package*.json ./
 
-# Install dependencies while skipping youtube-dl-exec postinstall
+# Install dependencies with proper build support
 USER node
-RUN npm install --ignore-scripts && \
-    npm rebuild youtube-dl-exec && \
-    npm run prepare --if-present
+RUN npm install && \
+    npm rebuild bcrypt --update-binary
 
-# Alternative: Install youtube-dl directly
-# RUN wget https://yt-dl.org/downloads/latest/youtube-dl -O /usr/local/bin/youtube-dl && \
-#     chmod a+rx /usr/local/bin/youtube-dl
+# Alternative if you still need to skip some postinstall scripts:
+# RUN npm install --ignore-scripts && \
+#     npm rebuild bcrypt youtube-dl-exec --update-binary
 
 # Copy application files
 COPY --chown=node:node . .

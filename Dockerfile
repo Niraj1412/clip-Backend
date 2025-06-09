@@ -1,6 +1,6 @@
 FROM node:22
 
-# Install system dependencies including FFmpeg
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y \
     python3 \
@@ -8,27 +8,25 @@ RUN apt-get update && \
     ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Install ffmpeg-static for fallback
+# Install ffmpeg-static globally
 RUN npm install -g ffmpeg-static
 
-# Create app directory and set permissions properly from the start
+# Create app directory structure with correct permissions
 WORKDIR /app
-RUN mkdir -p uploads tmp output && \
+RUN mkdir -p /app/uploads /app/tmp /app/output && \
     chown -R node:node /app
 
 # Copy package files first for better caching
 COPY --chown=node:node package*.json ./
 
-# Switch to node user for npm install
+# Install dependencies as node user
 USER node
-
-# Install app dependencies
 RUN npm install
 
-# Copy app source with correct permissions
+# Copy application files
 COPY --chown=node:node . .
 
-# Environment variables for configuration
+# Set environment variables
 ENV UPLOADS_DIR=/app/uploads \
     TEMP_DIR=/app/tmp \
     OUTPUT_DIR=/app/output \

@@ -5,28 +5,32 @@ RUN apt-get update && \
     apt-get install -y \
     python3 \
     python3-pip \
-    ffmpeg && \
+    ffmpeg \
+    wget && \
     rm -rf /var/lib/apt/lists/*
 
-# Install ffmpeg-static globally
-RUN npm install -g ffmpeg-static
-
-# Create app directory structure with correct permissions
+# Create app directory structure
 WORKDIR /app
 RUN mkdir -p /app/uploads /app/tmp /app/output && \
     chown -R node:node /app
 
-# Copy package files first for better caching
+# Copy package files first
 COPY --chown=node:node package*.json ./
 
-# Install dependencies as node user
+# Install dependencies while skipping youtube-dl-exec postinstall
 USER node
-RUN npm install
+RUN npm install --ignore-scripts && \
+    npm rebuild youtube-dl-exec && \
+    npm run prepare --if-present
+
+# Alternative: Install youtube-dl directly
+# RUN wget https://yt-dl.org/downloads/latest/youtube-dl -O /usr/local/bin/youtube-dl && \
+#     chmod a+rx /usr/local/bin/youtube-dl
 
 # Copy application files
 COPY --chown=node:node . .
 
-# Set environment variables
+# Environment variables
 ENV UPLOADS_DIR=/app/uploads \
     TEMP_DIR=/app/tmp \
     OUTPUT_DIR=/app/output \

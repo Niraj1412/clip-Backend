@@ -20,22 +20,30 @@ const resolveVideoPath = (filePath) => {
   const possiblePaths = [
     path.join('/app/backend/uploads', filename), // Docker absolute
     path.join(process.cwd(), 'backend', 'uploads', filename), // Local/Docker
+    path.join(process.cwd(), 'uploads', filename), // Project root uploads (Docker & local)
     path.join(__dirname, '../../backend/uploads', filename), // Local dev
     path.join(__dirname, '../../uploads', filename), // Legacy
-    path.join('uploads', filename) // Relative
+    path.join('uploads', filename), // Relative
+    path.join(__dirname, '../../', 'uploads', filename), // <--- Add this line
+    path.join(__dirname, '..', '..', 'uploads', filename), // <--- Add this line (redundant but safe)
+    path.join(__dirname, 'uploads', filename) // <--- Add this line (for monorepo/project-root)
   ];
 
   // If filePath is already relative like 'uploads/xxx.mp4'
   if (filePath.startsWith('uploads/')) {
     possiblePaths.push(path.join(__dirname, '../../', filePath));
     possiblePaths.push(path.join(process.cwd(), filePath));
+    possiblePaths.push(path.join('/', filePath)); // <--- Add this line for absolute from root
   }
+
+  // Also check the raw filePath as a last resort
+  possiblePaths.push(filePath);
 
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) return p;
   }
 
-  throw new Error(`Could not resolve path for: ${filePath}`);
+  throw new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
 };
 
 const generateThumbnail = async (videoPath, outputPath) => {

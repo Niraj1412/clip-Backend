@@ -2,7 +2,7 @@ const { v4: uuidv4 } = require('uuid');
 const Video = require('../../model/uploadVideosSchema');
 const path = require('path');
 const fs = require('fs');
-const { processVideo } = require('./processVideo'); // Your existing processing function
+const processVideo = require('./processVideo'); // Use default import
 
 const uploadVideo = async (req, res) => {
   try {
@@ -13,16 +13,15 @@ const uploadVideo = async (req, res) => {
       });
     }
 
-    // Generate full absolute file path
-    const absoluteFilePath = path.resolve(req.file.path);
+    // Store relative path for portability
+    const relativeFilePath = path.join('uploads', req.file.filename).replace(/\\/g, '/');
 
     // Create video record
-    const videoId = uuidv4();
     const video = new Video({
       userId: req.user._id,
       title: req.file.originalname,
-      videoUrl: absoluteFilePath,  // Store full path for later processing
-      status: 'Processing',
+      videoUrl: relativeFilePath, // Store relative path
+      status: 'processing',
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -32,7 +31,7 @@ const uploadVideo = async (req, res) => {
     // Process video in background
     processVideo({
       videoId: video._id,
-      filePath: absoluteFilePath,
+      filePath: relativeFilePath, // Pass relative path
       userId: req.user._id,
       isBackgroundProcess: true,
       authToken: req.headers.authorization
@@ -48,8 +47,8 @@ const uploadVideo = async (req, res) => {
     console.error('Upload error:', error);
 
     // Clean up file if error occurred
-    if (req.file?.path) {
-      fs.unlink(req.file.path, () => {});
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
     }
 
     res.status(500).json({

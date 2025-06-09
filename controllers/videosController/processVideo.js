@@ -21,17 +21,19 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     }
 
     // Path resolution and validation (existing code remains the same)
-    let finalFilePath;
-    if (filePath) {
-      finalFilePath = path.resolve(filePath);
-    } else {
-      if (!video.videoUrl) {
-        throw new Error('No video URL found in database record');
-      }
-      const normalizedUrl = video.videoUrl.replace(/\\/g, '/').replace(/^\//, '');
-      const projectRoot = path.resolve(__dirname, '../..');
-      finalFilePath = path.join(projectRoot, 'backend', normalizedUrl);
-    }
+let finalFilePath;
+if (filePath) {
+  // If filePath is relative, resolve from project root
+  finalFilePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(__dirname, '../../', filePath);
+} else {
+  if (!video.videoUrl) {
+    throw new Error('No video URL found in database record');
+  }
+  const normalizedUrl = video.videoUrl.replace(/\\/g, '/').replace(/^\//, '');
+  finalFilePath = path.resolve(__dirname, '../../', normalizedUrl);
+}
 
     // File verification (existing code remains the same)
     if (!fs.existsSync(finalFilePath)) {

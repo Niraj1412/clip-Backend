@@ -13,21 +13,27 @@ const ffmpegPath = process.env.NODE_ENV === 'production'
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const resolveVideoPath = (filePath) => {
-  if (path.isAbsolute(filePath)) return filePath;
+  // If already absolute and exists, return as is
+  if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
 
-  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
-    const productionPaths = [
-      path.join('/backend/uploads', path.basename(filePath)),
-      path.join('/app/uploads', path.basename(filePath)),
-      path.join('/uploads', path.basename(filePath))
-    ];
-    for (const p of productionPaths) {
-      if (fs.existsSync(p)) return p;
-    }
+  const filename = path.basename(filePath);
+  const possiblePaths = [
+    path.join('/app/backend/uploads', filename), // Docker absolute
+    path.join(process.cwd(), 'backend', 'uploads', filename), // Local/Docker
+    path.join(__dirname, '../../backend/uploads', filename), // Local dev
+    path.join(__dirname, '../../uploads', filename), // Legacy
+    path.join('uploads', filename) // Relative
+  ];
+
+  // If filePath is already relative like 'uploads/xxx.mp4'
+  if (filePath.startsWith('uploads/')) {
+    possiblePaths.push(path.join(__dirname, '../../', filePath));
+    possiblePaths.push(path.join(process.cwd(), filePath));
   }
 
-  const devPath = path.join(__dirname, '../../uploads', path.basename(filePath));
-  if (fs.existsSync(devPath)) return devPath;
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) return p;
+  }
 
   throw new Error(`Could not resolve path for: ${filePath}`);
 };

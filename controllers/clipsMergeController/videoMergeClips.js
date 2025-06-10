@@ -11,20 +11,25 @@ const { uploadToS3 } = require('../../utils/s3');
 const configureFfmpeg = () => {
   let ffmpegPath;
 
-  try {
-    // Try ffmpeg-static first (works in both production and development)
-    ffmpegPath = require('ffmpeg-static');
-    console.log('Using ffmpeg-static path:', ffmpegPath);
-  } catch (err) {
-    console.error('Failed to load ffmpeg-static, falling back to system FFmpeg:', err);
-    
-    // Fallback to environment variable or default system path
-    ffmpegPath = process.env.FFMPEG_PATH || 
-      (process.env.NODE_ENV === 'production' ? '/usr/bin/ffmpeg' : 'ffmpeg');
-  }
+  // Determine environment
+  const isProduction = process.env.NODE_ENV === 'production';
 
-  // Set FFmpeg path
   try {
+    if (isProduction) {
+      // Production: Use system FFmpeg installed via apt-get
+      ffmpegPath = '/usr/bin/ffmpeg';
+    } else {
+      // Development: Try ffmpeg-static first
+      try {
+        ffmpegPath = require('ffmpeg-static');
+        console.log('Using ffmpeg-static path:', ffmpegPath);
+      } catch (err) {
+        // Fallback to environment variable or default Windows path
+        ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+      }
+    }
+
+    // Set and verify FFmpeg path
     console.log(`Setting FFmpeg path to: ${ffmpegPath}`);
     ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -34,94 +39,76 @@ const configureFfmpeg = () => {
       .on('start', () => console.log('FFmpeg verification started'))
       .on('error', err => {
         console.error('FFmpeg verification failed:', err);
-        // Don't throw error, just log it
-        console.warn('Continuing despite FFmpeg verification failure');
+        if (isProduction) {
+          throw new Error(`FFmpeg verification failed in production: ${err.message}`);
+        } else {
+          console.warn('FFmpeg verification failed in development, but continuing...');
+        }
       })
       .on('end', () => console.log('FFmpeg is available for use'))
       .outputOptions(['-version'])
-      .output('/dev/null')
+      .output(isProduction ? '/dev/null' : 'NUL')
       .run();
+
   } catch (err) {
     console.error('Error configuring FFmpeg:', err);
-    // Don't throw error, just log warning
-    console.warn('FFmpeg configuration failed, but continuing...');
+    if (isProduction) {
+      throw new Error(`Failed to configure FFmpeg in production: ${err.message}`);
+    } else {
+      console.warn('FFmpeg configuration failed in development, but continuing...');
+    }
   }
 };
-
 // Call configuration function
 configureFfmpeg();
 
 const resolveVideoPath = (filePath) => {
   console.log(`[Path Resolution] Attempting to resolve: ${filePath}`);
-  
-  // Get filename and clean the input path
-  const filename = path.basename(filePath);
+
   const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
+  const filename = path.basename(filePath);
+  const normalizedFilePath = filePath.replace(/\\/g, '/');
 
-  const projectRoot = process.env.PROJECT_ROOT || path.join(__dirname, '../../../../');
-
-  // Build comprehensive list of possible paths, ordered by priority
+  // Define possible paths
   const possiblePaths = [
-    // 1. Direct path from environment variable
+    // Absolute path based on UPLOADS_DIR
     path.join(uploadsBase, filename),
-    
-    // 2. Absolute paths relative to project root
-    path.join(projectRoot, 'backend/uploads', filename),
-    path.join(projectRoot, 'uploads', filename),
-    
-    // 3. Container-specific absolute paths
-    '/app/backend/uploads/' + filename,
-    '/app/uploads/' + filename,
-    
-    // 4. Relative paths (last resort)
-    path.join('backend/uploads', filename),
-    path.join('uploads', filename),
+    // Handle relative path stored in videoUrl (uploads/filename)
+    path.join(uploadsBase, normalizedFilePath.startsWith('uploads/') ? normalizedFilePath.slice(8) : normalizedFilePath),
+    // Fallback for container root
+    `/app/backend/uploads/${filename}`,
   ];
 
-  // Log all paths we're checking
   console.log('[Path Resolution] Checking paths:', possiblePaths);
 
-  // Check each path
   for (const p of possiblePaths) {
-    try {
-      const normalizedPath = path.normalize(p);
-      if (fs.existsSync(normalizedPath)) {
-        console.log(`[Path Resolution] Found at: ${normalizedPath}`);
-        return normalizedPath;
-      }
-    } catch (err) {
-      console.error(`[Path Resolution] Error checking path ${p}:`, err);
+    const normalizedPath = path.normalize(p);
+    if (fs.existsSync(normalizedPath)) {
+      console.log(`[Path Resolution] Found at: ${normalizedPath}`);
+      return normalizedPath;
     }
   }
 
-  // Additional debug info
+  // Debug info
   const debugInfo = {
     cwd: process.cwd(),
     environment: process.env.NODE_ENV,
     uploadsBase,
     originalPath: filePath,
     checkedPaths: possiblePaths,
-    foundFiles: possiblePaths.filter(p => {
-      try {
-        return fs.existsSync(p);
-      } catch {
-        return false;
-      }
-    })
   };
-
   console.error('[Path Resolution] Debug info:', debugInfo);
 
-  // List directory contents for debugging
   try {
-    const dockerUploadsContent = fs.readdirSync('/app/backend/uploads');
-    console.log('[Path Resolution] Contents of /app/backend/uploads:', dockerUploadsContent);
+    const uploadsContent = fs.readdirSync(uploadsBase);
+    console.log(`[Path Resolution] Contents of ${uploadsBase}:`, uploadsContent);
   } catch (err) {
-    console.error('[Path Resolution] Could not read /app/backend/uploads:', err);
+    console.error(`[Path Resolution] Could not read ${uploadsBase}:`, err);
   }
 
   throw new Error(`Could not resolve path for: ${filePath}\nTried paths:\n${possiblePaths.join('\n')}`);
 };
+
 
 const generateThumbnail = async (videoPath, outputPath) => {
   return new Promise((resolve, reject) => {

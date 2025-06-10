@@ -20,38 +20,38 @@ const resolveVideoPath = (filePath) => {
   
   // Get filename and clean the input path
   const filename = path.basename(filePath);
+  const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
 
-  // Docker-specific paths first (since we're in production)
-  const dockerPaths = [
-    '/app/backend/uploads',  // Primary Docker upload location
-    '/app/uploads',          // Secondary Docker location
+  // Build comprehensive list of possible paths, ordered by priority
+  const possiblePaths = [
+    // Docker paths (main upload locations)
+    path.join('/app/backend/uploads', filename),
+    path.join('/app/uploads', filename),
+    
+    // Direct paths
+    filePath,
+    path.join(process.cwd(), filePath),
+    
+    // Legacy paths
+    path.join(uploadsBase, filename),
+    path.join('uploads', filename),
+    path.join('backend/uploads', filename),
+    
+    // Absolute paths from project root
+    path.join(process.cwd(), 'backend/uploads', filename),
+    path.join(process.cwd(), 'uploads', filename),
+    
+    // Relative paths from current dir
+    path.join(__dirname, '../../backend/uploads', filename),
+    path.join(__dirname, '../../uploads', filename)
   ];
 
-  // Local development paths
-  const localPaths = [
-    path.join(__dirname, '../../backend/uploads'),
-    path.join(__dirname, '../../uploads'),
-    path.join(process.cwd(), 'backend/uploads'),
-    path.join(process.cwd(), 'uploads'),
-  ];
-
-  // Use Docker paths in production, otherwise use local paths
-  const basePaths = process.env.NODE_ENV === 'production' ? dockerPaths : localPaths;
-
-  // Build comprehensive list of possible paths
-  const possiblePaths = basePaths.map(basePath => path.join(basePath, filename));
-
-  // Add the original path if it's absolute
-  if (path.isAbsolute(filePath)) {
-    possiblePaths.unshift(filePath);
-  }
-
+  // Log all paths we're checking
   console.log('[Path Resolution] Checking paths:', possiblePaths);
 
   // Check each path
   for (const p of possiblePaths) {
     try {
-      // Normalize path to handle any ../ or ./ segments
       const normalizedPath = path.normalize(p);
       if (fs.existsSync(normalizedPath)) {
         console.log(`[Path Resolution] Found at: ${normalizedPath}`);
@@ -63,14 +63,30 @@ const resolveVideoPath = (filePath) => {
   }
 
   // Additional debug info
-  console.error('[Path Resolution] Debug info:', {
+  const debugInfo = {
     cwd: process.cwd(),
     environment: process.env.NODE_ENV,
+    uploadsBase,
     originalPath: filePath,
     checkedPaths: possiblePaths,
-    dockerPaths,
-    localPaths
-  });
+    foundFiles: possiblePaths.filter(p => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    })
+  };
+
+  console.error('[Path Resolution] Debug info:', debugInfo);
+
+  // List directory contents for debugging
+  try {
+    const dockerUploadsContent = fs.readdirSync('/app/backend/uploads');
+    console.log('[Path Resolution] Contents of /app/backend/uploads:', dockerUploadsContent);
+  } catch (err) {
+    console.error('[Path Resolution] Could not read /app/backend/uploads:', err);
+  }
 
   throw new Error(`Could not resolve path for: ${filePath}\nTried paths:\n${possiblePaths.join('\n')}`);
 };

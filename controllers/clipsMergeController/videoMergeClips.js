@@ -7,7 +7,7 @@ const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
 
 // Configure FFmpeg path
-const ffmpeg = require('fluent-ffmpeg');
+
 const ffmpegPath = process.env.NODE_ENV === 'production' 
   ? process.env.FFMPEG_PATH || '/usr/bin/ffmpeg'
   : require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');

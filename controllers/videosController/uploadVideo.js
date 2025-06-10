@@ -9,53 +9,58 @@ const uploadVideo = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         status: false,
-        error: 'No file uploaded'
+        error: 'No file uploaded',
       });
     }
 
-    // Store relative path for portability
-    const relativeFilePath = path.join('uploads', req.file.filename).replace(/\\/g, '/');
+    const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
+    const absoluteFilePath = path.join(uploadsBase, req.file.filename).replace(/\\/g, '/');
 
-    // Create video record
+    if (!fs.existsSync(absoluteFilePath)) {
+      throw new Error(`File not saved at: ${absoluteFilePath}`);
+    }
+
     const video = new Video({
       userId: req.user._id,
       title: req.file.originalname,
-      videoUrl: relativeFilePath, // Store relative path
+      videoUrl: absoluteFilePath, // Store absolute path
       status: 'processing',
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
 
     await video.save();
 
-    
+    console.log(`[Debug] Saved video with videoUrl: ${video.videoUrl}`);
 
-    // Process video in background
     processVideo({
       videoId: video._id,
-      filePath: relativeFilePath, // Pass relative path
+      filePath: absoluteFilePath,
       userId: req.user._id,
       isBackgroundProcess: true,
-      authToken: req.headers.authorization
+      authToken: req.headers.authorization,
     }).catch(err => console.error('Background processing error:', err));
 
     res.status(200).json({
       status: true,
       videoId: video._id,
-      message: 'Upload successful. Processing started.'
+      message: 'Upload successful. Processing started.',
     });
-
   } catch (error) {
     console.error('Upload error:', error);
 
-    // Clean up file if error occurred
     if (req.file?.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+      try {
+        fs.unlinkSync(req.file.path);
+        console.log(`[Cleanup] Deleted file: ${req.file.path}`);
+      } catch (cleanupError) {
+        console.error('File cleanup failed:', cleanupError);
+      }
     }
 
     res.status(500).json({
       status: false,
-      error: 'Failed to process upload'
+      error: 'Failed to process upload',
     });
   }
 };

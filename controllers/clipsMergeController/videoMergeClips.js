@@ -26,26 +26,27 @@ const resolveVideoPath = (filePath) => {
     }
   }
 
+  // Get filename and base directory
   const filename = path.basename(filePath);
-  const uploadsBase = process.env.UPLOADS_DIR || path.join(process.cwd(), 'backend', 'uploads');
+  const uploadsBase = process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
+  const appRoot = path.resolve(__dirname, '../../');
 
   // Comprehensive list of possible paths
   const possiblePaths = [
     // Docker production paths
-    path.join('/app', 'backend', 'uploads', filename),
-    path.join('/app', 'uploads', filename),
+    path.join('/app/uploads', filename),
+    path.join('/app/backend/uploads', filename),
     
-    // Local development paths
+    // Local development paths with absolute paths
+    path.join(appRoot, 'uploads', filename),
+    path.join(appRoot, 'backend/uploads', filename),
     path.join(uploadsBase, filename),
-    path.join(process.cwd(), 'uploads', filename),
-    path.join(process.cwd(), 'backend', 'uploads', filename),
     
-    // Relative paths
-    path.join('backend', 'uploads', filename),
-    path.join('uploads', filename),
+    // Original input path as fallback
+    filePath,
     
-    // Original path as last resort
-    filePath
+    // Try relative to project root
+    path.join(process.cwd(), filePath)
   ];
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
@@ -60,6 +61,15 @@ const resolveVideoPath = (filePath) => {
       console.error(`[Path Resolution] Error checking path ${p}:`, err);
     }
   }
+
+  // Additional debug info
+  console.error('[Path Resolution] Debug info:', {
+    cwd: process.cwd(),
+    appRoot,
+    uploadsBase,
+    originalPath: filePath,
+    checkedPaths: possiblePaths
+  });
 
   const error = new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
   console.error('[Path Resolution] Error:', error.message);

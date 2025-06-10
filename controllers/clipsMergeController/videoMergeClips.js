@@ -7,40 +7,53 @@ const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
 
 // Configure FFmpeg path
+const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = process.env.NODE_ENV === 'production' 
   ? process.env.FFMPEG_PATH || '/usr/bin/ffmpeg'
-  : require('ffmpeg-static');
+  : require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+
 ffmpeg.setFfmpegPath(ffmpegPath);
+console.log(`FFmpeg path set to: ${ffmpegPath}`);
 
 const resolveVideoPath = (filePath) => {
-  if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
-
-  const filename = path.basename(filePath);
-  const possiblePaths = [
-    path.join('/app/uploads', filename),
-    path.join('/app/backend/uploads', filename), // Docker absolute (your real Docker path)
-    path.join('/backend/uploads', filename), // Docker absolute (your real Docker path)
-    path.join(process.cwd(), 'backend', 'uploads', filename), // Local/dev absolute
-    path.join(__dirname, '../../backend/uploads', filename), // Relative from backend
-    path.join(process.cwd(), 'uploads', filename), // Project root uploads (if used)
-    path.join(__dirname, '../../uploads', filename), // Legacy
-    path.join('uploads', filename), // Relative
-  ];
-
-  // If filePath is already relative like 'uploads/xxx.mp4'
-  if (filePath.startsWith('uploads/')) {
-    possiblePaths.push(path.join('/app/backend', filePath)); // Docker absolute
-    possiblePaths.push(path.join(process.cwd(), 'backend', filePath));
-    possiblePaths.push(path.join(__dirname, '../../backend', filePath));
-    possiblePaths.push(path.join(process.cwd(), filePath));
-    possiblePaths.push(path.join(__dirname, '../../', filePath));
+  console.log(`Attempting to resolve path for: ${filePath}`);
+  
+  // First check if the path exists as-is
+  if (fs.existsSync(filePath)) {
+    console.log(`Found file at original path: ${filePath}`);
+    return filePath;
   }
 
-  // Also check the raw filePath as a last resort
-  possiblePaths.push(filePath);
+  const filename = path.basename(filePath);
+  
+  // Get the base uploads directory from environment or use default
+  const uploadsBase = process.env.UPLOADS_DIR || 
+                    path.join(process.cwd(), 'backend', 'uploads');
+
+  const possiblePaths = [
+    // Docker paths
+    path.join('/app', 'backend', 'uploads', filename),
+    path.join('/app', 'uploads', filename),
+    
+    // Local development paths
+    path.join(uploadsBase, filename),
+    path.join(process.cwd(), 'uploads', filename),
+    
+    // Relative paths
+    path.join('backend', 'uploads', filename),
+    path.join('uploads', filename),
+    
+    // Original path as last resort
+    filePath
+  ];
+
+  console.log('Possible paths being checked:', possiblePaths);
 
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      console.log(`Found file at: ${p}`);
+      return p;
+    }
   }
 
   throw new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);

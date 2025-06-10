@@ -17,7 +17,9 @@ const resolveVideoPath = (filePath) => {
 
   const filename = path.basename(filePath);
   const possiblePaths = [
+    path.join('/app/uploads', filename),
     path.join('/app/backend/uploads', filename), // Docker absolute (your real Docker path)
+    path.join('/backend/uploads', filename), // Docker absolute (your real Docker path)
     path.join(process.cwd(), 'backend', 'uploads', filename), // Local/dev absolute
     path.join(__dirname, '../../backend/uploads', filename), // Relative from backend
     path.join(process.cwd(), 'uploads', filename), // Project root uploads (if used)

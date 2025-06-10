@@ -16,28 +16,29 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 console.log(`FFmpeg path set to: ${ffmpegPath}`);
 
 const resolveVideoPath = (filePath) => {
-  console.log(`Attempting to resolve path for: ${filePath}`);
+  console.log(`[Path Resolution] Attempting to resolve: ${filePath}`);
   
-  // First check if the path exists as-is
-  if (fs.existsSync(filePath)) {
-    console.log(`Found file at original path: ${filePath}`);
-    return filePath;
+  // Check if path is already absolute and exists
+  if (path.isAbsolute(filePath)) {
+    if (fs.existsSync(filePath)) {
+      console.log(`[Path Resolution] Found at absolute path: ${filePath}`);
+      return filePath;
+    }
   }
 
   const filename = path.basename(filePath);
-  
-  // Get the base uploads directory from environment or use default
-  const uploadsBase = process.env.UPLOADS_DIR || 
-                    path.join(process.cwd(), 'backend', 'uploads');
+  const uploadsBase = process.env.UPLOADS_DIR || path.join(process.cwd(), 'backend', 'uploads');
 
+  // Comprehensive list of possible paths
   const possiblePaths = [
-    // Docker paths
+    // Docker production paths
     path.join('/app', 'backend', 'uploads', filename),
     path.join('/app', 'uploads', filename),
     
     // Local development paths
     path.join(uploadsBase, filename),
     path.join(process.cwd(), 'uploads', filename),
+    path.join(process.cwd(), 'backend', 'uploads', filename),
     
     // Relative paths
     path.join('backend', 'uploads', filename),
@@ -47,16 +48,22 @@ const resolveVideoPath = (filePath) => {
     filePath
   ];
 
-  console.log('Possible paths being checked:', possiblePaths);
+  console.log('[Path Resolution] Checking paths:', possiblePaths);
 
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      console.log(`Found file at: ${p}`);
-      return p;
+    try {
+      if (fs.existsSync(p)) {
+        console.log(`[Path Resolution] Found at: ${p}`);
+        return p;
+      }
+    } catch (err) {
+      console.error(`[Path Resolution] Error checking path ${p}:`, err);
     }
   }
 
-  throw new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
+  const error = new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
+  console.error('[Path Resolution] Error:', error.message);
+  throw error;
 };
 
 const generateThumbnail = async (videoPath, outputPath) => {

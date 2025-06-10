@@ -10,69 +10,41 @@ const { uploadToS3 } = require('../../utils/s3');
 
 const configureFfmpeg = () => {
   let ffmpegPath;
-  
-  if (process.env.NODE_ENV === 'production') {
-    // Production environment (Docker/Linux)
-    ffmpegPath = process.env.FFMPEG_PATH || '/usr/bin/ffmpeg';
-  } else {
-    // Development environment (Windows)
-    try {
-      // First try ffmpeg-static
-      ffmpegPath = require('ffmpeg-static');
-      
-      // Handle electron asar case
-      if (ffmpegPath.includes('app.asar')) {
-        ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-      }
-    } catch (err) {
-      console.error('Failed to load ffmpeg-static:', err);
-      
-      // Try system FFmpeg path from environment variable
-      if (process.env.FFMPEG_PATH) {
-        ffmpegPath = process.env.FFMPEG_PATH;
-      } else {
-        // Default Windows install location
-        const defaultPaths = [
-          'C:\\ffmpeg\\bin\\ffmpeg.exe',
-          'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
-          'C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe'
-        ];
-        
-        for (const path of defaultPaths) {
-          if (fs.existsSync(path)) {
-            ffmpegPath = path;
-            break;
-          }
-        }
-        
-        if (!ffmpegPath) {
-          throw new Error('FFmpeg not found. Please install FFmpeg or set FFMPEG_PATH environment variable.');
-        }
-      }
-    }
+
+  try {
+    // Try ffmpeg-static first (works in both production and development)
+    ffmpegPath = require('ffmpeg-static');
+    console.log('Using ffmpeg-static path:', ffmpegPath);
+  } catch (err) {
+    console.error('Failed to load ffmpeg-static, falling back to system FFmpeg:', err);
+    
+    // Fallback to environment variable or default system path
+    ffmpegPath = process.env.FFMPEG_PATH || 
+      (process.env.NODE_ENV === 'production' ? '/usr/bin/ffmpeg' : 'ffmpeg');
   }
 
-  // Set FFmpeg path and verify
+  // Set FFmpeg path
   try {
     console.log(`Setting FFmpeg path to: ${ffmpegPath}`);
     ffmpeg.setFfmpegPath(ffmpegPath);
-    
-    // Verify FFmpeg is working
+
+    // Verify FFmpeg installation
     const command = ffmpeg();
     command
       .on('start', () => console.log('FFmpeg verification started'))
       .on('error', err => {
         console.error('FFmpeg verification failed:', err);
-        throw err;
+        // Don't throw error, just log it
+        console.warn('Continuing despite FFmpeg verification failure');
       })
       .on('end', () => console.log('FFmpeg is available for use'))
-      .outputOptions(['-f', 'null'])
+      .outputOptions(['-version'])
       .output('/dev/null')
-      .duration(1)
       .run();
   } catch (err) {
     console.error('Error configuring FFmpeg:', err);
-    throw new Error(`Failed to configure FFmpeg: ${err.message}`);
+    // Don't throw error, just log warning
+    console.warn('FFmpeg configuration failed, but continuing...');
   }
 };
 

@@ -154,6 +154,19 @@ app.use('/api/v1', (req, res, next) => {
 }, processRoutes);
 
 
+// Add this near the start of the file after other requires
+const uploadsDir = path.join(__dirname, 'uploads');
+const backendUploadsDir = path.join(__dirname, 'backend/uploads');
+
+// Create all required directories
+[uploadsDir, backendUploadsDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    console.log(`Creating directory: ${dir}`);
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+
 // Add this before your routes
 const thumbnailsDir = path.join(__dirname, 'backend', 'thumbnails');
 if (!fs.existsSync(thumbnailsDir)) {

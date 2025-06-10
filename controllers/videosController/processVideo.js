@@ -10,34 +10,35 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     console.log(`Starting processing for video: ${videoId}`);
     console.log('Auth token:', authToken ? 'provided' : 'not provided');
 
-    // Find video with proper authorization
     const video = await Video.findOne({
       _id: videoId,
-      ...(!isBackgroundProcess && { userId })
+      ...(!isBackgroundProcess && { userId }),
     });
 
     if (!video) {
       throw new Error('Video not found or unauthorized access');
     }
 
-    // Path resolution and validation (existing code remains the same)
+    // Resolve file path
     let finalFilePath;
+    const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
     if (filePath) {
-      finalFilePath = path.isAbsolute(filePath) 
-        ? filePath 
-        : path.resolve(__dirname, '../../', filePath);
+      finalFilePath = filePath.startsWith('uploads/')
+        ? path.join(uploadsBase, filePath.slice(8))
+        : path.resolve(uploadsBase, path.basename(filePath));
     } else {
-      const video = await Video.findById(videoId);
-      if (!video?.videoUrl) throw new Error('No video URL found');
-      finalFilePath = path.resolve(__dirname, '../../', video.videoUrl);
+      if (!video.videoUrl) throw new Error('No video URL found');
+      finalFilePath = video.videoUrl.startsWith('uploads/')
+        ? path.join(uploadsBase, video.videoUrl.slice(8))
+        : path.join(uploadsBase, path.basename(video.videoUrl));
     }
 
-    // File verification (existing code remains the same)
+    console.log(`[Debug] Resolved file path: ${finalFilePath}`);
+
     if (!fs.existsSync(finalFilePath)) {
       throw new Error(`Video file not found at: ${finalFilePath}`);
     }
 
-    // Verify file content
     const stats = fs.statSync(finalFilePath);
     if (stats.size === 0) {
       throw new Error('File exists but is empty (0 bytes)');
@@ -101,29 +102,26 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
   } catch (error) {
     console.error(`Processing failed for video ${videoId}:`, error.stack || error);
 
-    // Error handling (existing code remains the same)
     const errorDetails = {
       message: error.message,
       stack: error.stack,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
     try {
-      await Video.findByIdAndUpdate(
-        videoId,
-        {
-          status: 'failed',
-          error: errorDetails,
-          updatedAt: new Date()
-        }
-      );
+      await Video.findByIdAndUpdate(videoId, {
+        status: 'failed',
+        error: errorDetails,
+        updatedAt: new Date(),
+      });
     } catch (dbError) {
       console.error('Failed to update video status:', dbError);
     }
 
-    if (filePath && fs.existsSync(filePath)) {
+    // Avoid deleting the file unless it's a temporary file
+    if (filePath && fs.existsSync(finalFilePath) && filePath.includes('/tmp/')) {
       try {
-        fs.unlinkSync(filePath);
+        fs.unlinkSync(finalFilePath);
       } catch (cleanupError) {
         console.error('File cleanup failed:', cleanupError);
       }
@@ -134,5 +132,6 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     throw processingError;
   }
 };
+
 
 module.exports = processVideo;

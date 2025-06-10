@@ -14,7 +14,7 @@ const uploadVideo = async (req, res) => {
     }
 
     // Store relative path for portability
-    const relativeFilePath = `uploads/${req.file.filename}`;
+    const relativeFilePath = path.join('uploads', req.file.filename).replace(/\\/g, '/');
 
     // Create video record
     const video = new Video({
@@ -28,12 +28,12 @@ const uploadVideo = async (req, res) => {
 
     await video.save();
 
-    const absolutePath = path.resolve(__dirname, '../../backend/uploads', req.file.filename);
+    
 
     // Process video in background
     processVideo({
       videoId: video._id,
-      filePath: absolutePath,
+      filePath: relativeFilePath, // Pass relative path
       userId: req.user._id,
       isBackgroundProcess: true,
       authToken: req.headers.authorization

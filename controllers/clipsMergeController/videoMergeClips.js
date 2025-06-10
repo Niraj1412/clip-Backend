@@ -22,28 +22,24 @@ const resolveVideoPath = (filePath) => {
   const filename = path.basename(filePath);
   const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
 
+  const projectRoot = process.env.PROJECT_ROOT || path.join(__dirname, '../../../../');
+
   // Build comprehensive list of possible paths, ordered by priority
   const possiblePaths = [
-    // Docker paths (main upload locations)
-    path.join('/app/backend/uploads', filename),
-    path.join('/app/uploads', filename),
-    
-    // Direct paths
-    filePath,
-    path.join(process.cwd(), filePath),
-    
-    // Legacy paths
+    // 1. Direct path from environment variable
     path.join(uploadsBase, filename),
-    path.join('uploads', filename),
+    
+    // 2. Absolute paths relative to project root
+    path.join(projectRoot, 'backend/uploads', filename),
+    path.join(projectRoot, 'uploads', filename),
+    
+    // 3. Container-specific absolute paths
+    '/app/backend/uploads/' + filename,
+    '/app/uploads/' + filename,
+    
+    // 4. Relative paths (last resort)
     path.join('backend/uploads', filename),
-    
-    // Absolute paths from project root
-    path.join(process.cwd(), 'backend/uploads', filename),
-    path.join(process.cwd(), 'uploads', filename),
-    
-    // Relative paths from current dir
-    path.join(__dirname, '../../backend/uploads', filename),
-    path.join(__dirname, '../../uploads', filename)
+    path.join('uploads', filename),
   ];
 
   // Log all paths we're checking

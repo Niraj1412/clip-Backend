@@ -17,36 +17,36 @@ console.log(`FFmpeg path set to: ${ffmpegPath}`);
 
 const resolveVideoPath = (filePath) => {
   console.log(`[Path Resolution] Attempting to resolve: ${filePath}`);
-  
-  // Check if path is already absolute and exists
-  if (path.isAbsolute(filePath)) {
-    if (fs.existsSync(filePath)) {
-      console.log(`[Path Resolution] Found at absolute path: ${filePath}`);
-      return filePath;
-    }
-  }
 
   const filename = path.basename(filePath);
-  const uploadsBase = process.env.UPLOADS_DIR || path.join(process.cwd(), 'backend', 'uploads');
 
   // Comprehensive list of possible paths
   const possiblePaths = [
-    // Docker production paths
-    path.join('/app', 'backend', 'uploads', filename),
-    path.join('/app', 'uploads', filename),
-    
-    // Local development paths
-    path.join(uploadsBase, filename),
-    path.join(process.cwd(), 'uploads', filename),
-    path.join(process.cwd(), 'backend', 'uploads', filename),
-    
-    // Relative paths
-    path.join('backend', 'uploads', filename),
-    path.join('uploads', filename),
-    
-    // Original path as last resort
-    filePath
+    path.join('/app/backend/uploads', filename), // Docker absolute (main location)
+    path.join(process.cwd(), 'backend', 'uploads', filename), // Local/dev absolute
+    path.join(__dirname, '../../backend/uploads', filename), // Relative from backend
+    path.join('/app/uploads', filename), // Docker legacy
+    path.join(process.cwd(), 'uploads', filename), // Project root uploads (if used)
+    path.join(__dirname, '../../uploads', filename), // Legacy
+    path.join('backend', 'uploads', filename), // Relative
+    path.join('uploads', filename), // Relative
   ];
+
+  // If filePath is already relative like 'uploads/xxx.mp4'
+  if (filePath.startsWith('uploads/')) {
+    possiblePaths.push(path.join('/app/backend', filePath)); // Docker absolute
+    possiblePaths.push(path.join(process.cwd(), 'backend', filePath));
+    possiblePaths.push(path.join(__dirname, '../../backend', filePath));
+    possiblePaths.push(path.join(process.cwd(), filePath));
+    possiblePaths.push(path.join(__dirname, '../../', filePath));
+  }
+
+  // Also check the raw filePath as a last resort
+  if (fs.existsSync(filePath)) {
+    console.log(`[Path Resolution] Found at original path: ${filePath}`);
+    return filePath;
+  }
+  possiblePaths.push(filePath);
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
 

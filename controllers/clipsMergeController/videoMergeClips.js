@@ -20,29 +20,31 @@ const resolveVideoPath = (filePath) => {
   
   // Get filename and clean the input path
   const filename = path.basename(filePath);
-  const uploadsBase = process.env.UPLOADS_DIR || 'uploads';
-  const appRoot = path.resolve(__dirname, '../../');
+
+  // Docker-specific paths first (since we're in production)
+  const dockerPaths = [
+    '/app/backend/uploads',  // Primary Docker upload location
+    '/app/uploads',          // Secondary Docker location
+  ];
+
+  // Local development paths
+  const localPaths = [
+    path.join(__dirname, '../../backend/uploads'),
+    path.join(__dirname, '../../uploads'),
+    path.join(process.cwd(), 'backend/uploads'),
+    path.join(process.cwd(), 'uploads'),
+  ];
+
+  // Use Docker paths in production, otherwise use local paths
+  const basePaths = process.env.NODE_ENV === 'production' ? dockerPaths : localPaths;
 
   // Build comprehensive list of possible paths
-  const possiblePaths = [
-    // Docker paths (absolute)
-    '/app/uploads/' + filename,
-    '/app/backend/uploads/' + filename,
-    
-    // Local development paths (absolute)
-    path.join(appRoot, 'uploads', filename),
-    path.join(appRoot, 'backend/uploads', filename),
-    
-    // Relative paths from different base points
-    path.join(process.cwd(), 'uploads', filename),
-    path.join(process.cwd(), 'backend/uploads', filename),
-    path.join(uploadsBase, filename),
-    
-    // Original path variations
-    filePath,
-    path.join(process.cwd(), filePath),
-    path.join(appRoot, filePath)
-  ];
+  const possiblePaths = basePaths.map(basePath => path.join(basePath, filename));
+
+  // Add the original path if it's absolute
+  if (path.isAbsolute(filePath)) {
+    possiblePaths.unshift(filePath);
+  }
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
 
@@ -63,11 +65,11 @@ const resolveVideoPath = (filePath) => {
   // Additional debug info
   console.error('[Path Resolution] Debug info:', {
     cwd: process.cwd(),
-    appRoot,
-    uploadsBase,
+    environment: process.env.NODE_ENV,
     originalPath: filePath,
     checkedPaths: possiblePaths,
-    env: process.env.NODE_ENV
+    dockerPaths,
+    localPaths
   });
 
   throw new Error(`Could not resolve path for: ${filePath}\nTried paths:\n${possiblePaths.join('\n')}`);

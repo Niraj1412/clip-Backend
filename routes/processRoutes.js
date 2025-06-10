@@ -22,17 +22,26 @@ const resolveFilePath = (videoUrl) => {
     return videoUrl;
   }
 
-  // Always use the filename only
+  // Handle absolute paths
+  if (videoUrl.startsWith('/')) {
+    return videoUrl;
+  }
+
   const filename = path.basename(videoUrl);
   const possiblePaths = [];
 
-  // Add Docker absolute path
-  possiblePaths.push(
-    path.join('/app/backend/uploads', filename), // Docker absolute path
-    path.join(__dirname, '../../backend/uploads', filename), // Local dev absolute path
-    path.join(__dirname, '../../uploads', filename), // Legacy
-    path.join('uploads', filename) // Relative
-  );
+  if (process.env.RAILWAY_ENVIRONMENT === 'production') {
+    possiblePaths.push(
+      path.join('/backend/uploads', filename),
+      path.join('/app/uploads', filename),
+      path.join('/uploads', filename)
+    );
+  } else {
+    possiblePaths.push(
+      path.join(__dirname, '../../uploads', filename),
+      path.join(__dirname, '../uploads', filename)
+    );
+  }
 
   // Add the original path as a fallback
   if (videoUrl.startsWith('uploads/')) {

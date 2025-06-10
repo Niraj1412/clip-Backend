@@ -8,12 +8,45 @@ const { uploadToS3 } = require('../../utils/s3');
 
 // Configure FFmpeg path
 
-const ffmpegPath = process.env.NODE_ENV === 'production' 
-  ? process.env.FFMPEG_PATH || '/usr/bin/ffmpeg'
-  : require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+const configureFfmpeg = () => {
+  let ffmpegPath;
+  
+  if (process.env.NODE_ENV === 'production') {
+    ffmpegPath = process.env.FFMPEG_PATH || '/usr/bin/ffmpeg';
+  } else {
+    try {
+      ffmpegPath = require('ffmpeg-static');
+      if (ffmpegPath.includes('app.asar')) {
+        ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
+      }
+    } catch (err) {
+      console.error('Failed to load ffmpeg-static:', err);
+      ffmpegPath = 'ffmpeg'; // fallback to system ffmpeg
+    }
+  }
 
-ffmpeg.setFfmpegPath(ffmpegPath);
-console.log(`FFmpeg path set to: ${ffmpegPath}`);
+  // Set FFmpeg path
+  try {
+    ffmpeg.setFfmpegPath(ffmpegPath);
+    console.log(`FFmpeg path set to: ${ffmpegPath}`);
+    
+    // Verify FFmpeg is working
+    const command = ffmpeg();
+    command.on('error', err => {
+      console.error('FFmpeg verification failed:', err);
+    });
+    command.on('end', () => {
+      console.log('FFmpeg is available for use');
+    });
+    command.output('/dev/null').run();
+  } catch (err) {
+    console.error('Error configuring FFmpeg:', err);
+    throw new Error('Failed to configure FFmpeg');
+  }
+};
+
+// Call configuration function
+configureFfmpeg();
 
 const resolveVideoPath = (filePath) => {
   console.log(`[Path Resolution] Attempting to resolve: ${filePath}`);

@@ -69,14 +69,11 @@ const resolveVideoPath = (filePath) => {
   const filename = path.basename(filePath);
   const normalizedFilePath = filePath.replace(/\\/g, '/');
 
-  // Define possible paths
   const possiblePaths = [
-    // Absolute path based on UPLOADS_DIR
-    path.join(uploadsBase, filename),
-    // Handle relative path stored in videoUrl (uploads/filename)
-    path.join(uploadsBase, normalizedFilePath.startsWith('uploads/') ? normalizedFilePath.slice(8) : normalizedFilePath),
-    // Fallback for container root
-    `/app/backend/uploads/${filename}`,
+    normalizedFilePath, // Direct path (if absolute)
+    path.join(uploadsBase, filename), // Base path + filename
+    path.join(uploadsBase, normalizedFilePath.startsWith('uploads/') ? normalizedFilePath.slice(8) : filename),
+    path.join(uploadsBase, normalizedFilePath.startsWith('backend/uploads/') ? normalizedFilePath.slice(16) : filename),
   ];
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
@@ -89,7 +86,6 @@ const resolveVideoPath = (filePath) => {
     }
   }
 
-  // Debug info
   const debugInfo = {
     cwd: process.cwd(),
     environment: process.env.NODE_ENV,

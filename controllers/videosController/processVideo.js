@@ -6,7 +6,7 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 
 const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = false, authToken }) => {
-  let finalFilePath;
+  let finalFilePath; // Declare at top to avoid ReferenceError
   try {
     console.log(`Starting processing for video: ${videoId}`);
     console.log('Auth token:', authToken ? 'provided' : 'not provided');
@@ -21,16 +21,15 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     }
 
     // Resolve file path
-    let finalFilePath;
     const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
     if (filePath) {
-      finalFilePath = filePath.startsWith('uploads/')
-        ? path.join(uploadsBase, filePath.slice(8))
+      finalFilePath = filePath.startsWith('uploads/') || filePath.startsWith('backend/uploads/')
+        ? path.join(uploadsBase, path.basename(filePath))
         : path.resolve(uploadsBase, path.basename(filePath));
     } else {
       if (!video.videoUrl) throw new Error('No video URL found');
-      finalFilePath = video.videoUrl.startsWith('uploads/')
-        ? path.join(uploadsBase, video.videoUrl.slice(8))
+      finalFilePath = video.videoUrl.startsWith('uploads/') || video.videoUrl.startsWith('backend/uploads/')
+        ? path.join(uploadsBase, path.basename(video.videoUrl))
         : path.join(uploadsBase, path.basename(video.videoUrl));
     }
 
@@ -78,7 +77,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
           thumbnailUrl: video.thumbnailUrl,
           duration: transcript.duration,
           updatedAt: new Date(),
-          processingCompletedAt: new Date()
+          processingCompletedAt: new Date(),
         },
         { new: true, session }
       );
@@ -91,7 +90,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
         videoId: updatedVideo._id,
         status: updatedVideo.status,
         thumbnailUrl: updatedVideo.thumbnailUrl,
-        transcriptId: transcript.id
+        transcriptId: transcript.id,
       };
     } catch (dbError) {
       await session.abortTransaction();
@@ -99,7 +98,6 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     } finally {
       session.endSession();
     }
-
   } catch (error) {
     console.error(`Processing failed for video ${videoId}:`, error.stack || error);
 
@@ -119,10 +117,11 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
       console.error('Failed to update video status:', dbError);
     }
 
-    // Avoid deleting the file unless it's a temporary file
-    if (filePath && fs.existsSync(finalFilePath) && filePath.includes('/tmp/')) {
+    // Only clean up if filePath is temporary
+    if (finalFilePath && fs.existsSync(finalFilePath) && finalFilePath.includes('/tmp/')) {
       try {
         fs.unlinkSync(finalFilePath);
+        console.log(`[Cleanup] Deleted temporary file: ${finalFilePath}`);
       } catch (cleanupError) {
         console.error('File cleanup failed:', cleanupError);
       }
@@ -133,6 +132,5 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     throw processingError;
   }
 };
-
 
 module.exports = processVideo;

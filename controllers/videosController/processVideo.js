@@ -6,6 +6,7 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 
 const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = false, authToken }) => {
+  let finalFilePath;
   try {
     console.log(`Starting processing for video: ${videoId}`);
     console.log('Auth token:', authToken ? 'provided' : 'not provided');

@@ -59,38 +59,38 @@ router.post('/', protect, upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({
       status: false,
-      error: 'No file uploaded'
+      error: 'No file uploaded',
     });
   }
 
   try {
-    // Create video record with correct path
+    const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
+    const absoluteFilePath = path.join(uploadsBase, req.file.filename).replace(/\\/g, '/');
+
     const video = new Video({
       userId: req.user._id,
       title: req.file.originalname,
-      videoUrl: path.join('uploads', req.file.filename).replace(/\\/g, '/'),
+      videoUrl: absoluteFilePath, // Store absolute path
       status: 'uploading',
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
 
     await video.save();
 
-    // Process video in background
     processVideo({
       videoId: video._id,
-      filePath: req.file.path,
+      filePath: req.file.path, // Pass absolute path
       userId: req.user._id,
       isBackgroundProcess: true,
-      authToken: req.headers.authorization
+      authToken: req.headers.authorization,
     }).catch(err => {
       console.error('Background processing error:', err);
-      // Update status if processing fails
       Video.findByIdAndUpdate(video._id, {
         status: 'failed',
-        error: err.message
+        error: err.message,
       }).catch(console.error);
     });
 
@@ -98,13 +98,11 @@ router.post('/', protect, upload.single('video'), async (req, res) => {
       status: true,
       videoId: video._id,
       message: 'Upload successful. Processing started.',
-      fileUrl: `/uploads/${req.file.filename}`
+      fileUrl: `/uploads/${req.file.filename}`,
     });
-
   } catch (error) {
     console.error('Upload error:', error);
 
-    // Clean up file if error occurred
     if (req.file?.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
@@ -112,7 +110,7 @@ router.post('/', protect, upload.single('video'), async (req, res) => {
     res.status(500).json({
       status: false,
       error: 'Failed to process upload',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });

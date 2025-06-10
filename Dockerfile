@@ -8,22 +8,21 @@ RUN apt-get update && \
     ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Create directories with correct permissions
-RUN mkdir -p /app/backend/uploads /app/uploads /app/tmp /app/output && \
-    chown -R node:node /app/backend/uploads /app/uploads /app/tmp /app/output
+# Create necessary directories
+RUN mkdir -p /app/backend/uploads && \
+    mkdir -p /app/uploads && \
+    mkdir -p /app/tmp && \
+    mkdir -p /app/output
 
-# Set working directory
+# Install ffmpeg-static for fallback
+RUN npm install -g ffmpeg-static
+
 WORKDIR /app
 
-# Copy package files
-COPY package*.json .
+COPY package*.json . 
 
-# Install dependencies as node user, including ffmpeg-static locally
-USER node
-RUN npm install && \
-    npm install ffmpeg-static
+RUN npm install 
 
-# Copy application code
 COPY . .
 
 # Set environment variables

@@ -18,44 +18,42 @@ console.log(`FFmpeg path set to: ${ffmpegPath}`);
 const resolveVideoPath = (filePath) => {
   console.log(`[Path Resolution] Attempting to resolve: ${filePath}`);
   
-  // Check if path is already absolute and exists
-  if (path.isAbsolute(filePath)) {
-    if (fs.existsSync(filePath)) {
-      console.log(`[Path Resolution] Found at absolute path: ${filePath}`);
-      return filePath;
-    }
-  }
-
-  // Get filename and base directory
+  // Get filename and clean the input path
   const filename = path.basename(filePath);
-  const uploadsBase = process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
+  const uploadsBase = process.env.UPLOADS_DIR || 'uploads';
   const appRoot = path.resolve(__dirname, '../../');
 
-  // Comprehensive list of possible paths
+  // Build comprehensive list of possible paths
   const possiblePaths = [
-    // Docker production paths
-    path.join('/app/uploads', filename),
-    path.join('/app/backend/uploads', filename),
+    // Docker paths (absolute)
+    '/app/uploads/' + filename,
+    '/app/backend/uploads/' + filename,
     
-    // Local development paths with absolute paths
+    // Local development paths (absolute)
     path.join(appRoot, 'uploads', filename),
     path.join(appRoot, 'backend/uploads', filename),
+    
+    // Relative paths from different base points
+    path.join(process.cwd(), 'uploads', filename),
+    path.join(process.cwd(), 'backend/uploads', filename),
     path.join(uploadsBase, filename),
     
-    // Original input path as fallback
+    // Original path variations
     filePath,
-    
-    // Try relative to project root
-    path.join(process.cwd(), filePath)
+    path.join(process.cwd(), filePath),
+    path.join(appRoot, filePath)
   ];
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
 
+  // Check each path
   for (const p of possiblePaths) {
     try {
-      if (fs.existsSync(p)) {
-        console.log(`[Path Resolution] Found at: ${p}`);
-        return p;
+      // Normalize path to handle any ../ or ./ segments
+      const normalizedPath = path.normalize(p);
+      if (fs.existsSync(normalizedPath)) {
+        console.log(`[Path Resolution] Found at: ${normalizedPath}`);
+        return normalizedPath;
       }
     } catch (err) {
       console.error(`[Path Resolution] Error checking path ${p}:`, err);
@@ -68,12 +66,11 @@ const resolveVideoPath = (filePath) => {
     appRoot,
     uploadsBase,
     originalPath: filePath,
-    checkedPaths: possiblePaths
+    checkedPaths: possiblePaths,
+    env: process.env.NODE_ENV
   });
 
-  const error = new Error(`Could not resolve path for: ${filePath}\nTried:\n${possiblePaths.join('\n')}`);
-  console.error('[Path Resolution] Error:', error.message);
-  throw error;
+  throw new Error(`Could not resolve path for: ${filePath}\nTried paths:\n${possiblePaths.join('\n')}`);
 };
 
 const generateThumbnail = async (videoPath, outputPath) => {

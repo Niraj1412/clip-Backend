@@ -12,36 +12,67 @@ const configureFfmpeg = () => {
   let ffmpegPath;
   
   if (process.env.NODE_ENV === 'production') {
+    // Production environment (Docker/Linux)
     ffmpegPath = process.env.FFMPEG_PATH || '/usr/bin/ffmpeg';
   } else {
+    // Development environment (Windows)
     try {
+      // First try ffmpeg-static
       ffmpegPath = require('ffmpeg-static');
+      
+      // Handle electron asar case
       if (ffmpegPath.includes('app.asar')) {
         ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
       }
     } catch (err) {
       console.error('Failed to load ffmpeg-static:', err);
-      ffmpegPath = 'ffmpeg'; // fallback to system ffmpeg
+      
+      // Try system FFmpeg path from environment variable
+      if (process.env.FFMPEG_PATH) {
+        ffmpegPath = process.env.FFMPEG_PATH;
+      } else {
+        // Default Windows install location
+        const defaultPaths = [
+          'C:\\ffmpeg\\bin\\ffmpeg.exe',
+          'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+          'C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe'
+        ];
+        
+        for (const path of defaultPaths) {
+          if (fs.existsSync(path)) {
+            ffmpegPath = path;
+            break;
+          }
+        }
+        
+        if (!ffmpegPath) {
+          throw new Error('FFmpeg not found. Please install FFmpeg or set FFMPEG_PATH environment variable.');
+        }
+      }
     }
   }
 
-  // Set FFmpeg path
+  // Set FFmpeg path and verify
   try {
+    console.log(`Setting FFmpeg path to: ${ffmpegPath}`);
     ffmpeg.setFfmpegPath(ffmpegPath);
-    console.log(`FFmpeg path set to: ${ffmpegPath}`);
     
     // Verify FFmpeg is working
     const command = ffmpeg();
-    command.on('error', err => {
-      console.error('FFmpeg verification failed:', err);
-    });
-    command.on('end', () => {
-      console.log('FFmpeg is available for use');
-    });
-    command.output('/dev/null').run();
+    command
+      .on('start', () => console.log('FFmpeg verification started'))
+      .on('error', err => {
+        console.error('FFmpeg verification failed:', err);
+        throw err;
+      })
+      .on('end', () => console.log('FFmpeg is available for use'))
+      .outputOptions(['-f', 'null'])
+      .output('/dev/null')
+      .duration(1)
+      .run();
   } catch (err) {
     console.error('Error configuring FFmpeg:', err);
-    throw new Error('Failed to configure FFmpeg');
+    throw new Error(`Failed to configure FFmpeg: ${err.message}`);
   }
 };
 

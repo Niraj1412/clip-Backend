@@ -1,39 +1,31 @@
-const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const Video = require('../../model/uploadVideosSchema');
 const FinalVideo = require('../../model/finalVideosSchema');
 const { uploadToS3 } = require('../../utils/s3');
-
-// Configure FFmpeg path
+const ffmpeg = require('fluent-ffmpeg');
 
 const configureFfmpeg = () => {
   let ffmpegPath;
-
-  // Determine environment
   const isProduction = process.env.NODE_ENV === 'production';
 
   try {
     if (isProduction) {
-      // Production: Use system FFmpeg installed via apt-get
       ffmpegPath = '/usr/bin/ffmpeg';
     } else {
-      // Development: Try ffmpeg-static first
       try {
         ffmpegPath = require('ffmpeg-static');
         console.log('Using ffmpeg-static path:', ffmpegPath);
       } catch (err) {
-        // Fallback to environment variable or default Windows path
         ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+        console.warn('Falling back to system FFmpeg:', ffmpegPath);
       }
     }
 
-    // Set and verify FFmpeg path
     console.log(`Setting FFmpeg path to: ${ffmpegPath}`);
     ffmpeg.setFfmpegPath(ffmpegPath);
 
-    // Verify FFmpeg installation
     const command = ffmpeg();
     command
       .on('start', () => console.log('FFmpeg verification started'))
@@ -41,25 +33,20 @@ const configureFfmpeg = () => {
         console.error('FFmpeg verification failed:', err);
         if (isProduction) {
           throw new Error(`FFmpeg verification failed in production: ${err.message}`);
-        } else {
-          console.warn('FFmpeg verification failed in development, but continuing...');
         }
       })
       .on('end', () => console.log('FFmpeg is available for use'))
       .outputOptions(['-version'])
       .output(isProduction ? '/dev/null' : 'NUL')
       .run();
-
   } catch (err) {
     console.error('Error configuring FFmpeg:', err);
     if (isProduction) {
       throw new Error(`Failed to configure FFmpeg in production: ${err.message}`);
-    } else {
-      console.warn('FFmpeg configuration failed in development, but continuing...');
     }
   }
 };
-// Call configuration function
+
 configureFfmpeg();
 
 const resolveVideoPath = (filePath) => {
@@ -70,10 +57,8 @@ const resolveVideoPath = (filePath) => {
   const normalizedFilePath = filePath.replace(/\\/g, '/');
 
   const possiblePaths = [
-    normalizedFilePath, // Direct path (if absolute)
-    path.join(uploadsBase, filename), // Base path + filename
-    path.join(uploadsBase, normalizedFilePath.startsWith('uploads/') ? normalizedFilePath.slice(8) : filename),
-    path.join(uploadsBase, normalizedFilePath.startsWith('backend/uploads/') ? normalizedFilePath.slice(16) : filename),
+    normalizedFilePath,
+    path.join(uploadsBase, filename),
   ];
 
   console.log('[Path Resolution] Checking paths:', possiblePaths);
@@ -81,7 +66,7 @@ const resolveVideoPath = (filePath) => {
   for (const p of possiblePaths) {
     const normalizedPath = path.normalize(p);
     if (fs.existsSync(normalizedPath)) {
-      console.log(`[Path Resolution] Found at: ${normalizedPath}`);
+      console.log(`[Path Resolution] Found at: ${normalizedPath}, size: ${fs.statSync(normalizedPath).size} bytes`);
       return normalizedPath;
     }
   }
@@ -105,205 +90,140 @@ const resolveVideoPath = (filePath) => {
   throw new Error(`Could not resolve path for: ${filePath}\nTried paths:\n${possiblePaths.join('\n')}`);
 };
 
-
-const generateThumbnail = async (videoPath, outputPath) => {
-  return new Promise((resolve, reject) => {
-    ffmpeg(videoPath)
-      .screenshots({
-        count: 1,
-        timemarks: ['50%'], // Capture from middle of video
-        filename: path.basename(outputPath),
-        folder: path.dirname(outputPath),
-        size: '320x180'
-      })
-      .on('end', () => resolve(outputPath))
-      .on('error', reject);
-  });
-};
-
-const videoMergeClips = async (clips, user, videoInfo = {}) => {
-  const jobId = uuidv4();
-  console.log(`[${jobId}] Starting merge process`);
+const videoMergeClips = async (jobId, clips, user) => {
+  console.log(`[${jobId}] Processing ${clips.length} clips for user ${user.id}`);
+  const tempDir = path.join(process.env.TEMP_DIR || '/app/tmp', `merge-${jobId}`);
+  const outputDir = process.env.OUTPUT_DIR || '/app/output';
+  const outputFilename = `merged-${uuidv4()}.mp4`;
+  const outputPath = path.join(outputDir, outputFilename);
 
   try {
-    if (!clips?.length) throw new Error('No clips provided');
-
-    // Setup directories
-    const tempDir = path.join(process.env.TEMP_DIR || path.join(__dirname, '../../../tmp'), jobId);
-    const outputDir = process.env.OUTPUT_DIR || path.join(__dirname, '../../../output');
+    // Create directories
     fs.mkdirSync(tempDir, { recursive: true });
     fs.mkdirSync(outputDir, { recursive: true });
 
-    // Process clips
-    let totalDuration = 0;
-    const clipDetails = await Promise.all(clips.map(async (clip) => {
+    // Prepare clip segments
+    const clipFiles = [];
+    for (const clip of clips) {
       const video = await Video.findById(clip.videoId);
       if (!video) throw new Error(`Video not found: ${clip.videoId}`);
+      console.log(`[Debug] Video URL from DB: ${video.videoUrl}`);
 
       const resolvedPath = resolveVideoPath(video.videoUrl);
-      if (!fs.existsSync(resolvedPath)) throw new Error(`File not found: ${resolvedPath}`);
+      const tempClipPath = path.join(tempDir, `clip-${uuidv4()}.mp4`);
 
-      const duration = clip.endTime - clip.startTime;
-      totalDuration += duration;
+      console.log(`[${jobId}] Processing clip from ${resolvedPath} [${clip.startTime}s - ${clip.endTime}s]`);
 
-      return {
-        path: resolvedPath,
-        startTime: clip.startTime,
-        endTime: clip.endTime,
-        duration,
-        videoId: clip.videoId.toString(),
-        title: clip.title || video.title,
-        thumbnail: video.thumbnailUrl,
-        originalVideoTitle: video.title
-      };
-    }));
-
-    // Merge videos
-    const outputPath = path.join(outputDir, `merged_${jobId}.mp4`);
-    const startTime = Date.now();
-
-    return new Promise((resolve, reject) => {
-      const command = ffmpeg();
-      let ffmpegProcess;
-      let timeout;
-
-      // Add inputs with time trimming
-      clipDetails.forEach(clip => {
-        command.input(clip.path)
-          .inputOptions([`-ss ${clip.startTime}`])
-          .inputOptions([`-to ${clip.endTime}`]);
+      // Extract clip with re-encoding to ensure compatibility
+      await new Promise((resolve, reject) => {
+        ffmpeg(resolvedPath)
+          .setStartTime(clip.startTime)
+          .setDuration(clip.endTime - clip.startTime)
+          .outputOptions([
+            '-c:v libx264', // H.264 video codec
+            '-preset fast', // Balance speed and quality
+            '-crf 23', // Constant rate factor for quality
+            '-c:a aac', // AAC audio codec
+            '-b:a 192k', // Audio bitrate
+            '-movflags +faststart', // Optimize for web playback
+            '-f mp4', // Force MP4 container
+          ])
+          .output(tempClipPath)
+          .on('start', commandLine => console.log(`[${jobId}] FFmpeg command: ${commandLine}`))
+          .on('progress', progress => console.log(`[${jobId}] Processing: ${progress.percent}% done`))
+          .on('error', err => {
+            console.error(`[${jobId}] FFmpeg error:`, err);
+            reject(err);
+          })
+          .on('end', () => {
+            console.log(`[${jobId}] Clip extracted to ${tempClipPath}`);
+            resolve();
+          })
+          .run();
       });
 
-      // Configure merge with robust settings
-      command.complexFilter([
-        {
-          filter: 'concat',
-          options: { 
-            n: clipDetails.length, 
-            v: 1, 
-            a: 1,
-            unsafe: 1
-          },
-          outputs: ['v', 'a']
-        }
-      ])
-      .outputOptions([
-        '-map', '[v]',
-        '-map', '[a]',
-        '-c:v', 'libx264',
-        '-preset', 'medium', // More reliable than 'fast'
-        '-crf', '23',
-        '-movflags', '+faststart',
-        '-pix_fmt', 'yuv420p',
-        '-max_muxing_queue_size', '9999', // Increased buffer
-        '-threads', '1', // Single thread for stability
-        '-vsync', 'vfr', // Better frame rate handling
-        '-async', '1' // Better audio sync
-      ])
-      .on('start', (cmd) => {
-        console.log(`[${jobId}] FFmpeg command:`, cmd);
-        ffmpegProcess = cmd;
-        
-        // Set timeout to detect hangs (30 minutes)
-        timeout = setTimeout(() => {
-          if (ffmpegProcess) {
-            console.error(`[${jobId}] Process timeout - killing FFmpeg`);
-            process.kill(ffmpegProcess.pid, 'SIGKILL');
-          }
-        }, 30 * 60 * 1000);
-      })
-      .on('progress', (progress) => {
-        console.log(`[${jobId}] Progress: ${Math.round(progress.percent || 0)}%`);
-      })
-      .on('end', async () => {
-        clearTimeout(timeout);
-        try {
-          console.log(`[${jobId}] Merge successful`);
-          
-          // Generate thumbnail
-          let thumbnailUrl;
-          try {
-            const thumbPath = path.join(outputDir, `thumb_${jobId}.jpg`);
-            await generateThumbnail(outputPath, thumbPath);
-            thumbnailUrl = await uploadToS3(thumbPath, 
-              `merged-videos/${user.id}/thumbs/thumb_${jobId}.jpg`, {
-              ContentType: 'image/jpeg',
-              ACL: 'public-read'
-            });
-            fs.unlinkSync(thumbPath);
-          } catch (thumbErr) {
-            console.error(`[${jobId}] Thumbnail error:`, thumbErr);
-            thumbnailUrl = clipDetails[0]?.thumbnail || '';
-          }
+      clipFiles.push(tempClipPath);
+    }
 
-          // Upload merged video
-          const s3Key = `merged-videos/${user.id}/merged_${jobId}.mp4`;
-          const s3Url = await uploadToS3(outputPath, s3Key, {
-            ContentType: 'video/mp4',
-            ACL: 'public-read'
-          });
+    // Create concat list file
+    const concatListPath = path.join(tempDir, 'concat.txt');
+    const concatContent = clipFiles.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(concatListPath, concatContent);
+    console.log(`[${jobId}] Concat list created at ${concatListPath}`);
 
-          // Save to database
-          const finalVideo = new FinalVideo({
-            userId: user.id.toString(),
-            title: videoInfo.title || `Merged Video ${new Date().toLocaleDateString()}`,
-            description: videoInfo.description || '',
-            jobId,
-            duration: totalDuration,
-            s3Url,
-            thumbnailUrl,
-            userEmail: user.email || '',
-            userName: user.name || '',
-            sourceClips: clipDetails.map(c => ({
-              videoId: c.videoId,
-              title: c.title,
-              startTime: c.startTime,
-              endTime: c.endTime,
-              duration: c.duration,
-              thumbnail: c.thumbnail,
-              originalVideoTitle: c.originalVideoTitle
-            })),
-            stats: {
-              totalClips: clipDetails.length,
-              totalDuration,
-              processingTime: Date.now() - startTime,
-              mergeDate: new Date()
-            }
-          });
-          await finalVideo.save();
-
-          // Cleanup
-          fs.rmSync(tempDir, { recursive: true, force: true });
-          fs.unlinkSync(outputPath);
-
-          resolve({
-            success: true,
-            videoUrl: s3Url,
-            videoId: finalVideo._id,
-            thumbnailUrl,
-            duration: totalDuration
-          });
-        } catch (err) {
-          console.error(`[${jobId}] Post-merge error:`, err);
+    // Merge clips with re-encoding
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(concatListPath)
+        .inputOptions(['-f concat', '-safe 0'])
+        .outputOptions([
+          '-c:v libx264',
+          '-preset fast',
+          '-crf 23',
+          '-c:a aac',
+          '-b:a 192k',
+          '-movflags +faststart',
+          '-f mp4',
+        ])
+        .output(outputPath)
+        .on('start', commandLine => console.log(`[${jobId}] Merge FFmpeg command: ${commandLine}`))
+        .on('progress', progress => console.log(`[${jobId}] Merging: ${progress.percent}% done`))
+        .on('error', err => {
+          console.error(`[${jobId}] Merge FFmpeg error:`, err);
           reject(err);
-        }
-      })
-      .on('error', (err, stdout, stderr) => {
-        clearTimeout(timeout);
-        console.error(`[${jobId}] FFmpeg error:`, err);
-        console.error(`[${jobId}] FFmpeg stdout:`, stdout);
-        console.error(`[${jobId}] FFmpeg stderr:`, stderr);
-        reject(new Error(`Merge failed: ${err.message}`));
-      })
-      .save(outputPath);
+        })
+        .on('end', () => {
+          console.log(`[${jobId}] Merged video created at ${outputPath}`);
+          resolve();
+        })
+        .run();
     });
+
+    // Verify output file
+    if (!fs.existsSync(outputPath)) {
+      throw new Error(`Merged video not found at ${outputPath}`);
+    }
+    const stats = fs.statSync(outputPath);
+    console.log(`[${jobId}] Output file size: ${stats.size} bytes`);
+
+    // Upload to S3
+    const s3Key = `final-videos/${outputFilename}`;
+    const s3Url = await uploadToS3(outputPath, s3Key, {
+      ContentType: 'video/mp4',
+      ACL: 'public-read', // Ensure public access
+    });
+    console.log(`[${jobId}] Uploaded to S3: ${s3Url}`);
+
+    // Save to database
+    const finalVideo = new FinalVideo({
+      userId: user.id,
+      clipsInfo: clips,
+      fileNames3: outputFilename,
+      s3Url,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await finalVideo.save();
+    console.log(`[${jobId}] Saved to database with ID: ${finalVideo._id}`);
+
+    return {
+      success: true,
+      videoUrl: s3Url,
+      finalVideoId: finalVideo._id,
+    };
   } catch (error) {
     console.error(`[${jobId}] Merge error:`, error);
     throw error;
+  } finally {
+    // Cleanup
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+      console.log(`[${jobId}] Cleaned up temporary files`);
+    } catch (cleanupErr) {
+      console.error(`[${jobId}] Cleanup error:`, cleanupErr);
+    }
   }
 };
 
-module.exports = {
-  videoMergeClips,
-  resolveVideoPath
-};
+module.exports = { resolveVideoPath, videoMergeClips };

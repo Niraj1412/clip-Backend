@@ -3,8 +3,7 @@ app = "clip-backend"
 primary_region = "iad"
 
 [build]
-  builder = "paketobuildpacks/builder-jammy-base"
-  buildpacks = ["gcr.io/paketo-buildpacks/nodejs"]
+  dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = "production"

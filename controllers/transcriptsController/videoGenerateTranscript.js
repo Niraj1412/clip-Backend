@@ -1,72 +1,81 @@
-const { AssemblyAI } = require('assemblyai');
+const { YoutubeTranscript } = require('youtube-transcript');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 const path = require('path');
 const fs = require('fs');
 
-const client = new AssemblyAI({
-  apiKey: process.env.ASSEMBLYAI_API_KEY
-});
-
-const generateTranscript = async (videoUrl) => {
+const generateTranscript = async ({ filePath, videoId, source }) => {
   try {
-    console.log(`Starting transcription for: ${videoUrl}`);
-    
-    // Handle local file paths
-    const isLocalFile = videoUrl.startsWith('/uploads/');
-    let audioUrl = videoUrl;
-    
-    if (isLocalFile) {
-      const filePath = path.join(__dirname, '../..', videoUrl);
-      if (!fs.existsSync(filePath)) {
-        throw new Error('Video file not found');
-      }
-      
-      console.log('Uploading file to AssemblyAI...');
-      const fileStream = fs.createReadStream(filePath);
-      audioUrl = await client.files.upload(fileStream);
-    }
+    console.log(`[Transcript] Generating for ${source} video: ${videoId || filePath}`);
 
-    console.log('Submitting for transcription...');
-    let transcript = await client.transcripts.create({
-      audio_url: audioUrl,
-      speaker_labels: true,
-      auto_highlights: true,
-      disfluencies: true,
-      format_text: true
-    });
-
-    // Poll for completion with timeout
-    const startTime = Date.now();
-    const timeout = 600000; // 10 minutes
-    
-    while (transcript.status !== 'completed' && transcript.status !== 'error') {
-      if (Date.now() - startTime > timeout) {
-        throw new Error('Transcription timeout');
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      transcript = await client.transcripts.get(transcript.id);
-      console.log(`Transcription status: ${transcript.status}`);
-    }
-
-    if (transcript.status === 'error') {
-      throw new Error(transcript.error);
-    }
-
-    return {
-      text: transcript.text,
-      duration: transcript.audio_duration,
-      segments: transcript.utterances?.map(u => ({
-        start: u.start,
-        end: u.end,
-        text: u.text,
-        speaker: u.speaker
-      })) || [],
-      words: transcript.words,
-      confidence: transcript.confidence
+    let transcript = {
+      text: '',
+      segments: [],
+      language: 'en',
+      duration: 0,
     };
 
+    if (source === 'youtube' && videoId) {
+      // Fetch YouTube transcript
+      try {
+        const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+        transcript.text = transcriptData.map(s => s.text).join(' ');
+        transcript.segments = transcriptData.map((s, i) => ({
+          id: `segment-${i}`,
+          text: s.text,
+          start: s.offset / 1000, // Convert ms to seconds
+          end: (s.offset + s.duration) / 1000,
+          duration: s.duration / 1000,
+          confidence: null,
+          words: [],
+        }));
+        transcript.duration = transcript.segments.length
+          ? transcript.segments[transcript.segments.length - 1].end
+          : 0;
+      } catch (error) {
+        console.error('[Transcript] YouTube transcript error:', error);
+        throw new Error('No transcript available for this YouTube video');
+      }
+    } else if (source === 'upload' && filePath) {
+      // Process uploaded video with Whisper
+      try {
+        const outputDir = path.dirname(filePath);
+        const outputFile = path.join(outputDir, `transcript-${Date.now()}.json`);
+        const command = `whisper ${filePath} --model small --output_format json --language en --output_dir ${outputDir}`;
+        console.log(`[Transcript] Whisper command: ${command}`);
+
+        const { stdout, stderr } = await execPromise(command);
+        if (stderr) {
+          console.warn('[Transcript] Whisper stderr:', stderr);
+        }
+
+        const transcriptJson = JSON.parse(fs.readFileSync(outputFile));
+        transcript.text = transcriptJson.text || '';
+        transcript.segments = transcriptJson.segments.map((s, i) => ({
+          id: `segment-${i}`,
+          text: s.text,
+          start: s.start, // Already in seconds
+          end: s.end,
+          duration: s.end - s.start,
+          confidence: s.confidence || null,
+          words: s.words || [],
+        }));
+        transcript.duration = transcriptJson.info?.duration || transcript.segments[transcript.segments.length - 1]?.end || 0;
+        fs.unlinkSync(outputFile); // Clean up
+      } catch (error) {
+        console.error('[Transcript] Whisper error:', error);
+        throw new Error('Failed to generate transcript for uploaded video');
+      }
+    } else {
+      throw new Error('Invalid source or missing parameters');
+    }
+
+    console.log(`[Transcript] Generated:`, JSON.stringify(transcript.segments.slice(0, 2), null, 2));
+
+    return transcript;
   } catch (error) {
-    console.error('Transcription failed:', error);
+    console.error('[Transcript] Error:', error);
     throw new Error(`Transcription error: ${error.message}`);
   }
 };

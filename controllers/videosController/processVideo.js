@@ -113,6 +113,8 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
       }),
     };
 
+    console.log(`[Process] Normalized transcript:`, JSON.stringify(normalizedTranscript.segments.slice(0, 2), null, 2));
+
     // Validate duration
     let duration = transcript.duration || 0;
     if (duration > 1000) {

@@ -122,11 +122,11 @@ router.get('/:videoId/transcript', async (req, res) => {
       },
     };
 
-    console.log(`[Transcript] Response for video ${videoId}:`, JSON.stringify(response.data.transcript.segments.slice(0, 2), null, 2));
+    console.log(`[Transcript] Response for video ${req.params.videoId}:`, JSON.stringify(response.data.transcript.segments.slice(0, 2), null, 2));
 
     res.json(response);
   } catch (error) {
-    console.error('Transcript fetch error:', error);
+    console.error('[Transcript] Fetch error:', error);
     res.status(500).json({
       success: false,
       error: 'Server error while fetching transcript',
@@ -204,7 +204,7 @@ router.get('/:videoId/details', async (req, res) => {
 
     res.json(response);
   } catch (error) {
-    console.error('Video details error:', error);
+    console.error('[Video] Details error:', error);
     res.status(500).json({
       success: false,
       error: 'Server error while fetching video details',

@@ -30,7 +30,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
       if (!video.videoUrl) throw new Error('No video URL found');
       finalFilePath = video.videoUrl.startsWith('uploads/') || video.videoUrl.startsWith('backend/uploads/')
         ? path.join(uploadsBase, path.basename(video.videoUrl))
-        : path.join(uploadsBase, path.basename(video.videoUrl));
+        : path.join(UploadsBase, path.basename(video.videoUrl));
     }
 
     console.log(`[Debug] Resolved file path: ${finalFilePath}`);
@@ -81,7 +81,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
         let start = segment.start ?? segment.startTime ?? 0;
         let end = segment.end ?? segment.endTime ?? 0;
 
-        // Convert milliseconds to seconds if needed
+        // Safeguard: Convert milliseconds to seconds if needed
         if (start > 1000) {
           console.warn(`[Transcript] Large start time at segment ${index}: ${start}, converting from ms to s`);
           start /= 1000;
@@ -109,6 +109,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
           duration: Number((end - start).toFixed(3)),
           confidence: segment.confidence ?? null,
           words: segment.words || [],
+          speaker: segment.speaker || null,
         };
       }),
     };

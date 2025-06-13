@@ -1,18 +1,15 @@
 # fly.toml configuration file for clip-backend
-# Generated for Fly.io deployment
-# See: https://fly.io/docs/v2/app-configuration/ for details
-
-app = "fly-app"
+app = "clip-backend"
 primary_region = "iad"
 
 [build]
-  builder = "paketobuildpacks/builder:base"
-  buildpacks = ["gcr.io/paketo-buildpacks/pnpm"]
+  builder = "paketobuildpacks/builder-jammy-base"
+  buildpacks = ["gcr.io/paketo-buildpacks/nodejs"]
 
 [env]
   NODE_ENV = "production"
   PORT = "8086"
-  API_BASE_URL = "https://clip-backend-f93c.onrender.com"
+  API_BASE_URL = "https://clip-backend.fly.dev"
   AWS_ENDPOINT_URL_S3 = "https://fly.storage.tigris.dev"
   AWS_REGION = "auto"
   BUCKET_NAME = "clip-backend-bucket"

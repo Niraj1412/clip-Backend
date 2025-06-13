@@ -6,7 +6,7 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 
 const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = false, authToken }) => {
-  let finalFilePath; // Declare at top to avoid ReferenceError
+  let finalFilePath;
   try {
     console.log(`Starting processing for video: ${videoId}`);
     console.log('Auth token:', authToken ? 'provided' : 'not provided');
@@ -44,7 +44,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
       throw new Error('File exists but is empty (0 bytes)');
     }
 
-    // Create thumbnails directory if it doesn't exist
+    // Create thumbnails directory
     const thumbnailsDir = path.join(__dirname, '../../backend/thumbnails');
     if (!fs.existsSync(thumbnailsDir)) {
       fs.mkdirSync(thumbnailsDir, { recursive: true });
@@ -63,9 +63,67 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
 
     // Generate transcript
     console.log(`Generating transcript for video: ${videoId}`);
-    const transcript = await generateTranscript(finalFilePath);
+    const transcript = await generateTranscript({
+      filePath: finalFilePath,
+      videoId: video.videoId, // For YouTube videos
+      source: video.source,
+    });
 
-    // Update video status with transaction
+    // Validate and normalize transcript
+    if (!transcript?.segments?.length) {
+      throw new Error('No transcript segments generated');
+    }
+
+    const normalizedTranscript = {
+      text: transcript.text || '',
+      language: transcript.language || 'en',
+      segments: transcript.segments.map((segment, index) => {
+        let start = segment.start ?? segment.startTime ?? 0;
+        let end = segment.end ?? segment.endTime ?? 0;
+
+        // Convert milliseconds to seconds if needed
+        if (start > 1000) {
+          console.warn(`[Transcript] Large start time at segment ${index}: ${start}, converting from ms to s`);
+          start /= 1000;
+        }
+        if (end > 1000) {
+          console.warn(`[Transcript] Large end time at segment ${index}: ${end}, converting from ms to s`);
+          end /= 1000;
+        }
+
+        // Validate timestamps
+        if (typeof start !== 'number' || start < 0) {
+          console.warn(`[Transcript] Invalid start time at segment ${index}: ${start}, setting to 0`);
+          start = 0;
+        }
+        if (typeof end !== 'number' || end <= start) {
+          console.warn(`[Transcript] Invalid end time at segment ${index}: ${end}, adjusting`);
+          end = start + 1;
+        }
+
+        return {
+          id: segment.id || `segment-${index}`,
+          text: segment.text || '',
+          start: Number(start.toFixed(3)),
+          end: Number(end.toFixed(3)),
+          duration: Number((end - start).toFixed(3)),
+          confidence: segment.confidence ?? null,
+          words: segment.words || [],
+        };
+      }),
+    };
+
+    // Validate duration
+    let duration = transcript.duration || 0;
+    if (duration > 1000) {
+      console.warn(`[Transcript] Large duration: ${duration}, converting from ms to s`);
+      duration /= 1000;
+    }
+    if (!duration && normalizedTranscript.segments.length) {
+      duration = normalizedTranscript.segments[normalizedTranscript.segments.length - 1].end;
+    }
+
+    // Update video with transaction
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -73,9 +131,9 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
         videoId,
         {
           status: 'processed',
-          transcript,
+          transcript: normalizedTranscript,
           thumbnailUrl: video.thumbnailUrl,
-          duration: transcript.duration,
+          duration: Number(duration.toFixed(3)),
           updatedAt: new Date(),
           processingCompletedAt: new Date(),
         },
@@ -90,7 +148,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
         videoId: updatedVideo._id,
         status: updatedVideo.status,
         thumbnailUrl: updatedVideo.thumbnailUrl,
-        transcriptId: transcript.id,
+        transcriptId: updatedVideo.transcript.id,
       };
     } catch (dbError) {
       await session.abortTransaction();
@@ -110,14 +168,13 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     try {
       await Video.findByIdAndUpdate(videoId, {
         status: 'failed',
-        error: errorDetails,
+        processingError: errorDetails.message,
         updatedAt: new Date(),
       });
     } catch (dbError) {
       console.error('Failed to update video status:', dbError);
     }
 
-    // Only clean up if filePath is temporary
     if (finalFilePath && fs.existsSync(finalFilePath) && finalFilePath.includes('/tmp/')) {
       try {
         fs.unlinkSync(finalFilePath);

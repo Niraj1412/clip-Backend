@@ -23,25 +23,32 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     // Resolve file path
     const uploadsBase = process.env.UPLOADS_DIR || '/app/backend/uploads';
     if (filePath) {
-      finalFilePath = filePath.startsWith('uploads/') || filePath.startsWith('backend/uploads/')
-        ? path.join(uploadsBase, path.basename(filePath))
-        : path.resolve(uploadsBase, path.basename(filePath));
+      if (video.source === 'youtube') {
+        finalFilePath = filePath; // YouTube: filePath is an audio URL
+      } else {
+        finalFilePath = filePath.startsWith('uploads/') || filePath.startsWith('backend/uploads/')
+          ? path.join(uploadsBase, path.basename(filePath))
+          : path.resolve(uploadsBase, path.basename(filePath));
+      }
     } else {
       if (!video.videoUrl) throw new Error('No video URL found');
       finalFilePath = video.videoUrl.startsWith('uploads/') || video.videoUrl.startsWith('backend/uploads/')
         ? path.join(uploadsBase, path.basename(video.videoUrl))
-        : path.join(UploadsBase, path.basename(video.videoUrl));
+        : path.join(uploadsBase, path.basename(video.videoUrl));
     }
 
     console.log(`[Debug] Resolved file path: ${finalFilePath}`);
 
-    if (!fs.existsSync(finalFilePath)) {
+    // Skip file existence check for YouTube videos
+    if (video.source !== 'youtube' && !fs.existsSync(finalFilePath)) {
       throw new Error(`Video file not found at: ${finalFilePath}`);
     }
 
-    const stats = fs.statSync(finalFilePath);
-    if (stats.size === 0) {
-      throw new Error('File exists but is empty (0 bytes)');
+    if (video.source !== 'youtube') {
+      const stats = fs.statSync(finalFilePath);
+      if (stats.size === 0) {
+        throw new Error('File exists but is empty (0 bytes)');
+      }
     }
 
     // Create thumbnails directory
@@ -54,8 +61,12 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     const thumbnailFilename = `${videoId}.jpg`;
     const thumbnailPath = path.join(thumbnailsDir, thumbnailFilename);
     try {
-      await generateThumbnail(finalFilePath, thumbnailPath);
-      video.thumbnailUrl = `/thumbnails/${thumbnailFilename}`;
+      if (video.source === 'youtube' && video.thumbnailUrl) {
+        video.thumbnailUrl = video.thumbnailUrl; // Use YouTube-provided thumbnail
+      } else {
+        await generateThumbnail(finalFilePath, thumbnailPath);
+        video.thumbnailUrl = `/thumbnails/${thumbnailFilename}`;
+      }
     } catch (thumbnailError) {
       console.error('Using default thumbnail due to:', thumbnailError);
       video.thumbnailUrl = '/default-thumbnail.jpg';
@@ -65,7 +76,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
     console.log(`Generating transcript for video: ${videoId}`);
     const transcript = await generateTranscript({
       filePath: finalFilePath,
-      videoId: video.videoId, // For YouTube videos
+      videoId: video.videoId, // YouTube video ID
       source: video.source,
     });
 
@@ -81,7 +92,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
         let start = segment.start ?? segment.startTime ?? 0;
         let end = segment.end ?? segment.endTime ?? 0;
 
-        // Safeguard: Convert milliseconds to seconds if needed
+        // Convert milliseconds to seconds if needed
         if (start > 1000) {
           console.warn(`[Transcript] Large start time at segment ${index}: ${start}, converting from ms to s`);
           start /= 1000;
@@ -108,7 +119,12 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
           end: Number(end.toFixed(3)),
           duration: Number((end - start).toFixed(3)),
           confidence: segment.confidence ?? null,
-          words: segment.words || [],
+          words: segment.words?.map(word => ({
+            text: word.text,
+            start: word.start > 1000 ? word.start / 1000 : word.start,
+            end: word.end > 1000 ? word.end / 1000 : word.end,
+            confidence: word.confidence || null,
+          })) || [],
           speaker: segment.speaker || null,
         };
       }),
@@ -126,7 +142,7 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
       duration = normalizedTranscript.segments[normalizedTranscript.segments.length - 1].end;
     }
 
-    // Update video with transaction
+    // Update video document
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -136,7 +152,10 @@ const processVideo = async ({ videoId, filePath, userId, isBackgroundProcess = f
           status: 'processed',
           transcript: normalizedTranscript,
           thumbnailUrl: video.thumbnailUrl,
+          videoUrl: video.source === 'youtube' ? video.videoUrl : `/uploads/${path.basename(finalFilePath)}`,
           duration: Number(duration.toFixed(3)),
+          fileSize: video.source !== 'youtube' ? fs.statSync(finalFilePath).size : 0,
+          mimeType: video.source !== 'youtube' ? 'video/mp4' : null,
           updatedAt: new Date(),
           processingCompletedAt: new Date(),
         },

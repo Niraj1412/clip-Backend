@@ -62,7 +62,6 @@ router.get('/:videoId/transcript', async (req, res) => {
 
     // Normalize and validate segments
     const segments = (video.transcript.segments || []).map((segment, index) => {
-      // Extract start and end, handling both field names
       let start = segment.start ?? segment.startTime ?? 0;
       let end = segment.end ?? segment.endTime ?? 0;
 
@@ -176,6 +175,18 @@ router.get('/:videoId/details', async (req, res) => {
       }
     }
 
+    // Ensure thumbnail URL is absolute
+    let thumbnailUrl = video.thumbnailUrl || `/thumbnails/${video._id}.jpg`;
+    if (!thumbnailUrl.startsWith('http')) {
+      thumbnailUrl = `${process.env.API_BASE_URL || 'https://clip-backend-f93c.onrender.com'}${thumbnailUrl}`;
+    }
+
+    // Ensure video URL is absolute for uploaded videos
+    let videoUrl = video.videoUrl;
+    if (video.source === 'upload' && videoUrl && !videoUrl.startsWith('http')) {
+      videoUrl = `${process.env.API_BASE_URL || 'https://clip-backend-f93c.onrender.com'}${videoUrl}`;
+    }
+
     // Convert to ISO format
     const minutes = Math.floor(duration / 60);
     const seconds = Math.floor(duration % 60);
@@ -186,19 +197,20 @@ router.get('/:videoId/details', async (req, res) => {
       data: {
         videoId: video._id,
         userId: video.userId,
-        title: video.title,
-        description: '',
-        videoUrl: video.videoUrl,
-        thumbnailUrl: video.thumbnailUrl,
+        title: video.title || 'Uploaded Video',
+        description: video.description || '',
+        videoUrl: videoUrl || null,
+        thumbnailUrl,
         duration: Number(duration.toFixed(3)), // Seconds
         durationISO,
-        fileSize: video.fileSize,
-        mimeType: video.mimeType,
-        status: video.status,
+        fileSize: video.fileSize || 0,
+        mimeType: video.mimeType || 'video/mp4',
+        status: video.status || 'processed',
         createdAt: video.createdAt,
         updatedAt: video.updatedAt,
         processingCompletedAt: video.processingCompletedAt,
         hasTranscript: !!video.transcript,
+        source: video.source || 'upload',
       },
     };
 

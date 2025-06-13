@@ -22,12 +22,8 @@ const generateTranscript = async ({ filePath, videoId, source }) => {
       console.log('[Transcript] Uploading file to AssemblyAI...');
       const fileStream = fs.createReadStream(resolvedPath);
       audioUrl = await client.files.upload(fileStream);
-    } else if (source === 'youtube' && videoId) {
-      // For YouTube, assume filePath is a URL or fetch audio separately
-      if (!filePath) {
-        throw new Error('No audio URL provided for YouTube video');
-      }
-      audioUrl = filePath; // Expect filePath to be a direct audio URL
+    } else if (source === 'youtube' && filePath) {
+      audioUrl = filePath;
     } else {
       throw new Error('Invalid source or missing parameters');
     }
@@ -63,7 +59,7 @@ const generateTranscript = async ({ filePath, videoId, source }) => {
     const result = {
       text: transcript.text || '',
       duration: transcript.audio_duration ? transcript.audio_duration / 1000 : 0, // Seconds
-      language: transcript.language || 'en',
+      language: transcript.language_code || 'en',
       segments: transcript.utterances?.map((u, i) => ({
         id: `segment-${i}`,
         start: u.start / 1000, // Convert ms to seconds
@@ -72,9 +68,19 @@ const generateTranscript = async ({ filePath, videoId, source }) => {
         text: u.text,
         speaker: u.speaker,
         confidence: transcript.confidence || null,
-        words: u.words || [],
+        words: u.words?.map(word => ({
+          text: word.text,
+          start: word.start / 1000, // Convert ms to seconds
+          end: word.end / 1000, // Convert ms to seconds
+          confidence: word.confidence || null,
+        })) || [],
       })) || [],
     };
+
+    // Fallback duration
+    if (!result.duration && result.segments.length) {
+      result.duration = result.segments[result.segments.length - 1].end;
+    }
 
     console.log(`[Transcript] Generated:`, JSON.stringify(result.segments.slice(0, 2), null, 2));
 

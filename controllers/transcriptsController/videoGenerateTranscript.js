@@ -1,81 +1,86 @@
-const { YoutubeTranscript } = require('youtube-transcript');
-const { exec } = require('child_process');
-const util = require('util');
-const execPromise = util.promisify(exec);
+const { AssemblyAI } = require('assemblyai');
 const path = require('path');
 const fs = require('fs');
+
+const client = new AssemblyAI({
+  apiKey: process.env.ASSEMBLYAI_API_KEY,
+});
 
 const generateTranscript = async ({ filePath, videoId, source }) => {
   try {
     console.log(`[Transcript] Generating for ${source} video: ${videoId || filePath}`);
 
-    let transcript = {
-      text: '',
-      segments: [],
-      language: 'en',
-      duration: 0,
-    };
+    let audioUrl = filePath;
 
-    if (source === 'youtube' && videoId) {
-      // Fetch YouTube transcript
-      try {
-        const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
-        transcript.text = transcriptData.map(s => s.text).join(' ');
-        transcript.segments = transcriptData.map((s, i) => ({
-          id: `segment-${i}`,
-          text: s.text,
-          start: s.offset / 1000, // Convert ms to seconds
-          end: (s.offset + s.duration) / 1000,
-          duration: s.duration / 1000,
-          confidence: null,
-          words: [],
-        }));
-        transcript.duration = transcript.segments.length
-          ? transcript.segments[transcript.segments.length - 1].end
-          : 0;
-      } catch (error) {
-        console.error('[Transcript] YouTube transcript error:', error);
-        throw new Error('No transcript available for this YouTube video');
+    // Handle local files for uploaded videos
+    if (source === 'upload' && filePath) {
+      const resolvedPath = path.resolve(filePath);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`Video file not found at: ${resolvedPath}`);
       }
-    } else if (source === 'upload' && filePath) {
-      // Process uploaded video with Whisper
-      try {
-        const outputDir = path.dirname(filePath);
-        const outputFile = path.join(outputDir, `transcript-${Date.now()}.json`);
-        const command = `whisper ${filePath} --model small --output_format json --language en --output_dir ${outputDir}`;
-        console.log(`[Transcript] Whisper command: ${command}`);
 
-        const { stdout, stderr } = await execPromise(command);
-        if (stderr) {
-          console.warn('[Transcript] Whisper stderr:', stderr);
-        }
-
-        const transcriptJson = JSON.parse(fs.readFileSync(outputFile));
-        transcript.text = transcriptJson.text || '';
-        transcript.segments = transcriptJson.segments.map((s, i) => ({
-          id: `segment-${i}`,
-          text: s.text,
-          start: s.start, // Already in seconds
-          end: s.end,
-          duration: s.end - s.start,
-          confidence: s.confidence || null,
-          words: s.words || [],
-        }));
-        transcript.duration = transcriptJson.info?.duration || transcript.segments[transcript.segments.length - 1]?.end || 0;
-        fs.unlinkSync(outputFile); // Clean up
-      } catch (error) {
-        console.error('[Transcript] Whisper error:', error);
-        throw new Error('Failed to generate transcript for uploaded video');
+      console.log('[Transcript] Uploading file to AssemblyAI...');
+      const fileStream = fs.createReadStream(resolvedPath);
+      audioUrl = await client.files.upload(fileStream);
+    } else if (source === 'youtube' && videoId) {
+      // For YouTube, assume filePath is a URL or fetch audio separately
+      if (!filePath) {
+        throw new Error('No audio URL provided for YouTube video');
       }
+      audioUrl = filePath; // Expect filePath to be a direct audio URL
     } else {
       throw new Error('Invalid source or missing parameters');
     }
 
-    console.log(`[Transcript] Generated:`, JSON.stringify(transcript.segments.slice(0, 2), null, 2));
+    console.log('[Transcript] Submitting for transcription...');
+    let transcript = await client.transcripts.create({
+      audio_url: audioUrl,
+      speaker_labels: true,
+      auto_highlights: true,
+      disfluencies: true,
+      format_text: true,
+    });
 
-    return transcript;
+    // Poll for completion with timeout
+    const startTime = Date.now();
+    const timeout = 600000; // 10 minutes
+
+    while (transcript.status !== 'completed' && transcript.status !== 'error') {
+      if (Date.now() - startTime > timeout) {
+        throw new Error('Transcription timeout');
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      transcript = await client.transcripts.get(transcript.id);
+      console.log(`[Transcript] Status: ${transcript.status}`);
+    }
+
+    if (transcript.status === 'error') {
+      throw new Error(transcript.error);
+    }
+
+    // Convert milliseconds to seconds
+    const result = {
+      text: transcript.text || '',
+      duration: transcript.audio_duration ? transcript.audio_duration / 1000 : 0, // Seconds
+      language: transcript.language || 'en',
+      segments: transcript.utterances?.map((u, i) => ({
+        id: `segment-${i}`,
+        start: u.start / 1000, // Convert ms to seconds
+        end: u.end / 1000, // Convert ms to seconds
+        duration: (u.end - u.start) / 1000, // Seconds
+        text: u.text,
+        speaker: u.speaker,
+        confidence: transcript.confidence || null,
+        words: u.words || [],
+      })) || [],
+    };
+
+    console.log(`[Transcript] Generated:`, JSON.stringify(result.segments.slice(0, 2), null, 2));
+
+    return result;
   } catch (error) {
-    console.error('[Transcript] Error:', error);
+    console.error('[Transcript] Failed:', error);
     throw new Error(`Transcription error: ${error.message}`);
   }
 };

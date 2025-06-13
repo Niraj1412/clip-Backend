@@ -6,7 +6,9 @@ RUN apt-get update && \
     python3 \
     python3-pip \
     ffmpeg && \
+    pip3 install -U openai-whisper && \
     ffmpeg -version && \
+    python3 -m whisper --version && \
     rm -rf /var/lib/apt/lists/*
 
 # Create necessary directories with proper permissions
